@@ -254,7 +254,7 @@ const TU_NUMERO = '51996399291';
 const JID_DUEÑO = `${TU_NUMERO}@s.whatsapp.net`;
 const PUERTO = process.env.PORT || 3000;
 const LIMITE_DIARIO_ESTIMADO = 1400;
-const MAX_TOKENS_RESPUESTA = 500;
+const MAX_TOKENS_RESPUESTA = 1500;
 
 // Único comando explícito para llamar a la IA (además de mencionar al bot)
 const COMANDO_LLAMADA_IA = '/anzy';
