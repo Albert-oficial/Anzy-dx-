@@ -9,14 +9,39 @@ const fs = require('fs');
 const path = require('path');
 const { exec } = require('child_process');
 
+// ── UBICACIÓN DE yt-dlp / ffmpeg ──────────────────────────────
+// PROBLEMA EN RENDER: el runtime de Node de Render NO trae Python/pip
+// instalado, así que "pip install yt-dlp" fallaba en silencio y por eso
+// dejó de descargar música al subir el bot. Solución: usar el binario
+// standalone de yt-dlp (no necesita Python) descargado en ./bin durante
+// el build. Si existe ese binario local se usa; si no, se cae a "yt-dlp"
+// del PATH (por si corres el bot en tu PC con Python instalado).
+const CARPETA_BIN = path.join(__dirname, 'bin');
+const RUTA_YTDLP = fs.existsSync(path.join(CARPETA_BIN, 'yt-dlp'))
+  ? path.join(CARPETA_BIN, 'yt-dlp')
+  : 'yt-dlp';
+const HAY_FFMPEG_LOCAL = fs.existsSync(path.join(CARPETA_BIN, 'ffmpeg'));
+const ARGS_FFMPEG = HAY_FFMPEG_LOCAL ? `--ffmpeg-location "${CARPETA_BIN}"` : '';
+// Truco recomendado por los propios mantenedores de yt-dlp contra el error
+// "Sign in to confirm you're not a bot" que YouTube devuelve seguido a IPs
+// de servidores/nube (como las de Render). No cambia el comportamiento del
+// comando para el usuario, solo hace la descarga más confiable.
+const ARGS_YOUTUBE_ANTIBLOQUEO = `--extractor-args "youtube:player_client=android,web"`;
+
 // ── SISTEMA DE AUTOACTUALIZACIÓN ──────────────────────────────
+// Se autoactualiza sola (yt-dlp -U) al reiniciar el bot. Si el binario no
+// puede autoactualizarse (por ejemplo corriendo en local con Python), cae
+// de respaldo a pip.
 async function actualizarSistema() {
-  console.log('🔄 Buscando actualizaciones...');
+  console.log('🔄 Buscando actualizaciones de yt-dlp...');
   return new Promise((resolve) => {
-    exec('pip install --upgrade yt-dlp', (err) => {
-      if (err) console.log('⚠️ No se pudo actualizar automáticamente');
-      else console.log('✅ yt-dlp está en su versión más reciente');
-      resolve();
+    exec(`"${RUTA_YTDLP}" -U`, (err) => {
+      if (!err) { console.log('✅ yt-dlp está en su versión más reciente (auto-actualizado)'); return resolve(); }
+      exec('pip install --upgrade yt-dlp', (err2) => {
+        if (err2) console.log('⚠️ No se pudo actualizar yt-dlp automáticamente (revisa que exista bin/yt-dlp o Python):', err2.message);
+        else console.log('✅ yt-dlp actualizado vía pip');
+        resolve();
+      });
     });
   });
 }
@@ -37,15 +62,16 @@ async function descargarAudioYoutube(url) {
 
       await new Promise((resolve, reject) => {
         const cmd = [
-          'yt-dlp',
+          `"${RUTA_YTDLP}"`,
           '-f', 'bestaudio[ext=m4a]/bestaudio',
           '--no-playlist',
           '--retries', '5',
           '--socket-timeout', '30',
           '--no-check-certificates',
+          ARGS_YOUTUBE_ANTIBLOQUEO,
           '-o', `"${archivo}"`,
           `"${url}"`
-        ].join(' ');
+        ].filter(Boolean).join(' ');
 
         exec(cmd, { timeout: 120000 }, (err) => {
           if (err) return reject(err);
@@ -54,7 +80,6 @@ async function descargarAudioYoutube(url) {
         });
       });
 
-      // Limpia intentos anteriores
       for (let i = 1; i < intento; i++) {
         const viejo = path.join(__dirname, `temp_audio_${id}_${i}.m4a`);
         if (fs.existsSync(viejo)) fs.unlinkSync(viejo);
@@ -91,15 +116,16 @@ async function descargarVideoTiktokConYtDlp(url) {
       console.log(`🔄 [TikTok/yt-dlp] Intento ${intento} de ${MAX_INTENTOS_TIKTOK}...`);
       await new Promise((resolve, reject) => {
         const cmd = [
-          'yt-dlp',
+          `"${RUTA_YTDLP}"`,
           '-f', 'mp4/best',
           '--no-playlist',
           '--retries', '5',
           '--socket-timeout', '30',
           '--no-check-certificates',
+          ARGS_FFMPEG,
           '-o', `"${archivo}"`,
           `"${url}"`
-        ].join(' ');
+        ].filter(Boolean).join(' ');
         exec(cmd, { timeout: 120000 }, (err) => {
           if (err) return reject(err);
           if (fs.existsSync(archivo) && fs.statSync(archivo).size > 5000) resolve(archivo);
@@ -164,7 +190,7 @@ const DURACION_MAXIMA_VIDEO_SEGUNDOS = 6 * 60;
 
 async function obtenerDuracionYoutube(url) {
   return new Promise((resolve, reject) => {
-    exec(`yt-dlp --no-warnings --print duration "${url}"`, { timeout: 30000 }, (err, stdout) => {
+    exec(`"${RUTA_YTDLP}" --no-warnings ${ARGS_YOUTUBE_ANTIBLOQUEO} --print duration "${url}"`, { timeout: 30000 }, (err, stdout) => {
       if (err) return reject(err);
       const segundos = parseInt(String(stdout).trim(), 10);
       if (isNaN(segundos)) return reject(new Error('No se pudo leer la duración'));
@@ -181,16 +207,18 @@ async function descargarVideoYoutube(url) {
       console.log(`🔄 [YouTube video] Intento ${intento} de ${MAX_INTENTOS_DESCARGA}...`);
       await new Promise((resolve, reject) => {
         const cmd = [
-          'yt-dlp',
+          `"${RUTA_YTDLP}"`,
           '-f', 'bv*[height<=720][ext=mp4]+ba[ext=m4a]/best[ext=mp4]/best',
           '--no-playlist',
           '--retries', '5',
           '--socket-timeout', '30',
           '--no-check-certificates',
           '--merge-output-format', 'mp4',
+          ARGS_YOUTUBE_ANTIBLOQUEO,
+          ARGS_FFMPEG,
           '-o', `"${archivo}"`,
           `"${url}"`
-        ].join(' ');
+        ].filter(Boolean).join(' ');
         exec(cmd, { timeout: 180000 }, (err) => {
           if (err) return reject(err);
           if (fs.existsSync(archivo) && fs.statSync(archivo).size > 5000) resolve(archivo);
@@ -226,7 +254,7 @@ const TU_NUMERO = '51996399291';
 const JID_DUEÑO = `${TU_NUMERO}@s.whatsapp.net`;
 const PUERTO = process.env.PORT || 3000;
 const LIMITE_DIARIO_ESTIMADO = 1400;
-const MAX_TOKENS_RESPUESTA = 1500;
+const MAX_TOKENS_RESPUESTA = 500;
 
 // Único comando explícito para llamar a la IA (además de mencionar al bot)
 const COMANDO_LLAMADA_IA = '/anzy';
@@ -236,6 +264,7 @@ if (!CLAVE_IA_PRINCIPAL) {
 }
 if (!CLAVE_IA_RESPALDO) {
   console.log('⚠️ Aviso: no se detectó CLAVE_IA_RESPALDO (segundo token).');
+}
 }
 if (!CLAVE_IA_RESPALDO2) {
   console.log('⚠️ Aviso: no se detectó CLAVE_IA_RESPALDO2 (tercer token).');
@@ -423,6 +452,7 @@ async function enviarRespuestaHumanizada(sock, jid, texto, mentions) {
     console.log('⚠️ Error en envío humanizado:', err.message);
   }
 }
+
 function construirClientesIA() {
   const clientes = [];
   if (CLAVE_IA_PRINCIPAL) clientes.push({ ai: new GoogleGenAI({ apiKey: CLAVE_IA_PRINCIPAL }), modelo: MODELO_PRINCIPAL, nombre: 'principal' });
@@ -502,20 +532,16 @@ function obtenerIdentificadoresBot(sock) {
 function esMencionAlBot(msg, texto, identificadoresBot) {
   const mencionados = msg.message.extendedTextMessage?.contextInfo?.mentionedJid || [];
   const numerosMencionados = mencionados.map(j => j.split('@')[0]);
-  if (numerosMencionados.some(n => identificadoresBot.includes(n))) return true;
+if (numerosMencionados.some(n => identificadoresBot.includes(n))) return true;
   return identificadoresBot.some(id => texto.includes(`@${id}`));
 }
 
-// La IA solo responde si te mencionan, o si el mensaje empieza EXACTAMENTE
-// con /anzy (en cualquier combinación de mayúsculas/minúsculas).
 function debeResponderIA(texto, msg, identificadoresBot) {
   if (esMencionAlBot(msg, texto, identificadoresBot)) return true;
   const primeraPalabra = (texto.trim().split(/\s+/)[0] || '').toLowerCase();
   return primeraPalabra === COMANDO_LLAMADA_IA;
 }
 
-// Normaliza un participante de group-participants.update: en versiones nuevas de
-// Baileys llega como objeto { id, phoneNumber, admin } en vez de un string plano.
 function normalizarParticipante(participanteRaw) {
   if (typeof participanteRaw === 'string') {
     return { jid: participanteRaw, numero: participanteRaw.split('@')[0] };
@@ -525,7 +551,6 @@ function normalizarParticipante(participanteRaw) {
   return { jid, numero };
 }
 
-// ── NORMALIZACIÓN DE JIDs (arregla el bug de /perfil) ────────────────────
 function extraerNumero(jid) {
   return (jid || '').split('@')[0].split(':')[0];
 }
@@ -541,8 +566,6 @@ function buscarConteoEnMapa(mapa, jid) {
 }
 
 // ── RESPALDO EN LA NUBE (JSONBin) ──────────────────────────────────────────
-// Guarda los integrantes del clan en JSONBin además de en disco local, para
-// que la lista sobreviva a reinicios/redeploys de Render (que borran el disco).
 const JSONBIN_API_KEY = process.env.JSONBIN_API_KEY || '';
 const JSONBIN_BASE = 'https://api.jsonbin.io/v3/b';
 let jsonbinBinIdIntegrantes = process.env.JSONBIN_BIN_ID_INTEGRANTES || null;
@@ -581,9 +604,6 @@ async function jsonbinGuardar(binId, data) {
   if (!res.ok) throw new Error(`No se pudo guardar en el bin (${res.status})`);
 }
 
-// Se llama una vez al arrancar. Si no hay JSONBIN_BIN_ID_INTEGRANTES configurado,
-// crea el bin la primera vez y avisa por consola el ID para que lo agregues
-// como variable de entorno en Render (si no, cada reinicio crearía un bin nuevo).
 async function inicializarNubeIntegrantes() {
   if (!JSONBIN_API_KEY) {
     console.log('⚠️ JSONBIN_API_KEY no configurada — los integrantes solo se guardan en el disco local (se pueden perder si Render reinicia el disco).');
@@ -613,7 +633,7 @@ function cargarIntegrantes() {
   try { return JSON.parse(fs.readFileSync(ARCHIVO_INTEGRANTES, 'utf-8')); }
   catch (err) { return {}; }
 }
-let integrantesClan = cargarIntegrantes(); // { jidGrupo: [ {nombre, numero, idFF, apodo, agregadoPor, fecha} ] }
+let integrantesClan = cargarIntegrantes();
 let guardadoIntegrantesPendiente = null;
 function guardarIntegrantes() {
   if (guardadoIntegrantesPendiente) clearTimeout(guardadoIntegrantesPendiente);
@@ -657,9 +677,6 @@ const ETIQUETAS_MOVIMIENTO = {
   se_unio: { icono: '🔗', texto: 'se unió por enlace de invitación' }
 };
 
-// Evita que una acción hecha con un comando del bot (ej. /kick) se registre
-// DOS veces: una por el comando y otra por el evento group-participants.update
-// que WhatsApp dispara igual cuando el bot ejecuta la acción.
 const ACCIONES_BOT_RECIENTES = new Set();
 function marcarAccionBotReciente(jidGrupo, accion, jids) {
   jids.forEach(jid => {
@@ -672,14 +689,11 @@ function accionFueDelBot(jidGrupo, accion, jid) {
   return ACCIONES_BOT_RECIENTES.has(`${jidGrupo}:${accion}:${extraerNumero(jid)}`);
 }
 
-// jidEjecutor puede venir null (WhatsApp no siempre entrega quién hizo la acción)
 function registrarAccionAdmin(sock, jidGrupo, accionOriginal, jidEjecutor, jidsObjetivo) {
   let accion = accionOriginal;
   let objetivos = (jidsObjetivo || []).map(j => extraerNumero(j));
   const numeroEjecutor = jidEjecutor ? extraerNumero(jidEjecutor) : null;
 
-  // Si el "ejecutor" y el único afectado son la misma persona, es una salida
-  // voluntaria o un ingreso por enlace — no una acción de un admin sobre otro.
   if (numeroEjecutor && objetivos.length === 1 && objetivos[0] === numeroEjecutor) {
     if (accion === 'remove') accion = 'salio';
     if (accion === 'add') accion = 'se_unio';
@@ -766,10 +780,8 @@ async function comandoRanking(sock, jidGrupo) {
   return { texto, mentions };
 }
 
-// Compara por número (extraerNumero) además del JID exacto, para que
-// funcione aunque WhatsApp entregue el ID en formato @lid.
 async function esAdminGrupo(sock, jidGrupo, jidUsuario) {
-  try {
+try {
     const metadata = await sock.groupMetadata(jidGrupo);
     const numeroObjetivo = extraerNumero(jidUsuario);
     const participante = metadata.participants.find(p => {
@@ -783,7 +795,6 @@ async function esAdminGrupo(sock, jidGrupo, jidUsuario) {
   }
 }
 
-// Usa buscarConteoEnMapa (por número) en vez de mapa.get(jid) directo.
 async function comandoPerfil(sock, jidGrupo, jidUsuario, mencionJid) {
   const jidObjetivo = mencionJid || jidUsuario;
   const numero = jidObjetivo.split('@')[0];
@@ -794,7 +805,6 @@ async function comandoPerfil(sock, jidGrupo, jidUsuario, mencionJid) {
   await sock.sendMessage(jidGrupo, { text, mentions: [jidObjetivo] });
 }
 
-// ── GESTIÓN DEL CLAN ────────────────────────────────────────────────────
 function agregarIntegrante(jidGrupo, datos) {
   if (!integrantesClan[jidGrupo]) integrantesClan[jidGrupo] = [];
   const numeroLimpio = extraerNumero(datos.numero) || datos.numero;
@@ -890,9 +900,7 @@ async function comandoClanVer(sock, jidGrupo, criterio) {
 }
 
 // ── REGISTRO POR PARTES: /nombre agg, /numero agg, /id ff agg, /apodo agg ──
-// Cada admin arma su propia "ficha en construcción" mensaje por mensaje.
-// En cuanto los 4 campos están completos, se guarda automáticamente.
-const borradoresIntegrante = new Map(); // clave: "jidGrupo:jidUsuario" -> {nombre, numero, idFF, apodo}
+const borradoresIntegrante = new Map();
 function claveBorrador(jidGrupo, jidUsuario) { return `${jidGrupo}:${jidUsuario}`; }
 
 function actualizarBorrador(jidGrupo, jidUsuario, campo, valor) {
@@ -933,7 +941,6 @@ async function comandoCampoIntegrante(sock, jidGrupo, jidUsuario, campo, valor) 
   }
 }
 
-// ── MOVIMIENTOS (antes /auditoria) ─────────────────────────────────────────
 function formatearMovimiento(jidGrupo, r) {
   const info = ETIQUETAS_MOVIMIENTO[r.accion] || { icono: '•', texto: r.accion };
   const fecha = new Date(r.fecha).toLocaleString('es-PE', {
@@ -1036,7 +1043,7 @@ async function comandoCerrarGrupo(sock, jidGrupo, jidUsuario, cerrar) {
 
 function generarTextoInfo() {
   const uptimeH = ((Date.now() - estado.inicio) / 3600000).toFixed(1);
-  return `🤖 *${NOMBRE_BOT}* — v${VERSION_BOT}
+return `🤖 *${NOMBRE_BOT}* — v${VERSION_BOT}
 
 👨‍💻 Creada por: *${CREADOR}*, ingeniero de sistemas y estudiante de programación.
 🟢 Estado: ${estado.conectado ? 'Conectada y activa' : 'Desconectada'}
@@ -1044,6 +1051,7 @@ function generarTextoInfo() {
 
 Escribe /comandos para ver todo lo que puedo hacer.`;
 }
+
 const TEXTO_CREADOR = `💖 Fui creada con mucho cariño por *${CREADOR}*, ingeniero de sistemas y estudiante de programación que sigue mejorándome cada día. ¡Gracias por todo, Albert! 🙌✨`;
 
 const TEXTO_REGLAS = `╔════════════════════════╗
@@ -1206,8 +1214,6 @@ async function procesarMensajeGrupo(sock, msg, identificadoresBot) {
   const textoLower = texto.toLowerCase();
 
   // ✅ DESCARGAR VIDEO DE YOUTUBE CON /youtubevideo (máx. 6 min, mayúsc/minúsc)
-  // OJO: este chequeo va ANTES que el de /youtube para que "/youtubevideo"
-  // no sea interceptado por el comando de audio.
   const esComandoYoutubeVideo = /^\/youtubevideo(\s|$)/i.test(texto);
   if (esComandoYoutubeVideo) {
     const enlace = texto.replace(/^\/youtubevideo\s*/i, '').trim();
@@ -1292,7 +1298,6 @@ async function procesarMensajeGrupo(sock, msg, identificadoresBot) {
   }
 
   // ✅ DESCARGAR VIDEO DE TIKTOK SIN MARCA DE AGUA CON /tiktok o /tik tok
-  // (con o sin espacio, mayúsc/minúsc) — sistema de 2 capas con respaldo
   const esComandoTiktok = PATRON_COMANDO_TIKTOK.test(texto);
   if (esComandoTiktok) {
     const enlace = texto.replace(PATRON_COMANDO_TIKTOK, '').trim();
@@ -1302,7 +1307,7 @@ async function procesarMensajeGrupo(sock, msg, identificadoresBot) {
         text: '💕 Escríbelo así:\n/tiktok enlace-de-tiktok\n(también funciona /tik tok)\nY te lo bajo sin marca de agua ✨'
       });
       return;
-    }
+}
 
     await sock.sendMessage(jidGrupo, {
       text: '🎬 ¡Claro que sí! Dame un momentito, te preparo tu video sin marca de agua 💖'
@@ -1417,8 +1422,6 @@ async function procesarMensajeGrupo(sock, msg, identificadoresBot) {
         await sock.sendMessage(jidGrupo, { text: 'Listo, borré todo lo que recordaba de ti 🗑️' });
         return;
       }
-      // /clan agregar|quitar|ver siguen funcionando (compatibilidad), pero
-      // ya no aparecen en /comandos — la vía recomendada es /nombre agg, etc.
       case '/clan': {
         const sub = (resto[0] || '').toLowerCase();
         const restoSub = resto.slice(1).join(' ');
@@ -1458,7 +1461,6 @@ async function procesarMensajeGrupo(sock, msg, identificadoresBot) {
   }
 }
 
-// Se mantiene por compatibilidad con /clan lista (comando oculto).
 async function comandoClanLista(sock, jidGrupo) {
   await sock.sendMessage(jidGrupo, { text: generarTextoListaClan(jidGrupo) });
 }
@@ -1521,10 +1523,8 @@ const almacenMensajes = new Map();
 let nubeInicializada = false;
 
 async function iniciarBot() {
-  // ✅ ACTUALIZA AUTOMÁTICAMENTE AL ENCENDER
   await actualizarSistema();
 
-  // ☁️ Carga (o crea) el respaldo en la nube de los integrantes, una sola vez.
   if (!nubeInicializada) {
     await inicializarNubeIntegrantes();
     nubeInicializada = true;
@@ -1569,7 +1569,7 @@ async function iniciarBot() {
       estado.intentosReconexion++;
       setTimeout(() => iniciarBot(), calcularEsperaReconexion(estado.intentosReconexion));
     }
-  });
+});
 
   sock.ev.on('messages.upsert', async m => {
     if (m.type !== 'notify') return;
@@ -1582,7 +1582,6 @@ async function iniciarBot() {
 
     almacenMensajes.set(msg.key.id, msg.message);
 
-    // ✅ CHAT PRIVADO: SOLO MENÚ DEL JEFE — SIN DESCARGAS
     if (!remitente.endsWith('@g.us')) {
       if (remitente.endsWith('@s.whatsapp.net')) {
         const textoPersonal = (msg.message.conversation || msg.message.extendedTextMessage?.text || '').trim();
@@ -1631,9 +1630,6 @@ setInterval(async () => {
     }
   }
 }, 30 * 1000);
-
-
-
 
 const LISTA_COMANDOS_PANEL = [
   { cat: '🧠 Inteligencia Artificial', items: [
