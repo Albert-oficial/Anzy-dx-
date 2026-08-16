@@ -1442,6 +1442,27 @@ async function procesarMensajeGrupo(sock, msg, identificadoresBot) {
   const resto = partesTexto.slice(1);
 
   try {
+// ── DIAGNÓSTICO: solo el dueño puede pedir la lista real de formatos ──
+  if (textoLower.startsWith('/ytformatos ') && jidUsuario === JID_DUEÑO) {
+    const enlaceDiag = texto.replace(/^\/ytformatos\s*/i, '').trim();
+    if (!ENLACE_YOUTUBE.test(enlaceDiag)) {
+      await sock.sendMessage(jidGrupo, { text: 'Uso: /ytformatos <enlace-de-youtube>' });
+      return;
+    }
+    await sock.sendMessage(jidGrupo, { text: '🔬 Consultando formatos reales disponibles...' });
+    try {
+      const cmdDiag = [
+        `"${RUTA_YTDLP}"`, '--no-warnings', '--list-formats',
+        argsAntibloqueoPorIntento(1), ARGS_COOKIES, `"${enlaceDiag}"`
+      ].filter(Boolean).join(' ');
+      const resultado = await ejecutarComando(cmdDiag, { timeout: 30000 });
+      const salida = String(resultado).slice(0, 3500);
+      await sock.sendMessage(jidGrupo, { text: `📋 Formatos disponibles:\n\`\`\`${salida}\`\`\`` });
+    } catch (err) {
+      await sock.sendMessage(jidGrupo, { text: `❌ Error al listar formatos:\n\`\`\`${err.message.slice(0, 1500)}\`\`\`` });
+    }
+    return;
+  }
     switch (comando) {
       case '/matrimonio': {
         const { texto: t, mentions } = comandoMatrimonio(mencionados);
