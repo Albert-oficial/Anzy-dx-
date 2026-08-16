@@ -10,28 +10,22 @@ const path = require('path');
 const { exec } = require('child_process');
 
 // ── UBICACIÓN DE yt-dlp / ffmpeg ──────────────────────────────
-// PROBLEMA EN RENDER: el runtime de Node de Render NO trae Python/pip
-// instalado, así que "pip install yt-dlp" fallaba en silencio y por eso
-// dejó de descargar música al subir el bot. Solución: usar el binario
-// standalone de yt-dlp (no necesita Python) descargado en ./bin durante
-// el build. Si existe ese binario local se usa; si no, se cae a "yt-dlp"
-// del PATH (por si corres el bot en tu PC con Python instalado).
+// IMPORTANTE: en el build command de Render debes descargar el asset
+// "yt-dlp_linux" (NO "yt-dlp" a secas). El archivo "yt-dlp" normal
+// necesita Python instalado para correr, y Render no trae Python en su
+// runtime de Node — por eso las descargas de YouTube fallaban en
+// silencio mientras TikTok seguía funcionando (TikTok tiene un respaldo
+// por API que no depende de yt-dlp). Build command correcto:
+//
+// npm install && mkdir -p bin && curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux -o bin/yt-dlp && chmod +x bin/yt-dlp
 const CARPETA_BIN = path.join(__dirname, 'bin');
 const RUTA_YTDLP = fs.existsSync(path.join(CARPETA_BIN, 'yt-dlp'))
   ? path.join(CARPETA_BIN, 'yt-dlp')
   : 'yt-dlp';
 const HAY_FFMPEG_LOCAL = fs.existsSync(path.join(CARPETA_BIN, 'ffmpeg'));
 const ARGS_FFMPEG = HAY_FFMPEG_LOCAL ? `--ffmpeg-location "${CARPETA_BIN}"` : '';
-// Truco recomendado por los propios mantenedores de yt-dlp contra el error
-// "Sign in to confirm you're not a bot" que YouTube devuelve seguido a IPs
-// de servidores/nube (como las de Render). No cambia el comportamiento del
-// comando para el usuario, solo hace la descarga más confiable.
-const ARGS_YOUTUBE_ANTIBLOQUEO = `--extractor-args "youtube:player_client=android,web"`;
 
-// ── SISTEMA DE AUTOACTUALIZACIÓN ──────────────────────────────
-// Se autoactualiza sola (yt-dlp -U) al reiniciar el bot. Si el binario no
-// puede autoactualizarse (por ejemplo corriendo en local con Python), cae
-// de respaldo a pip.
+// ── SISTEMA DE AUTOACTUALIZACIÓN (se ejecuta sola al reiniciar el bot) ─
 async function actualizarSistema() {
   console.log('🔄 Buscando actualizaciones de yt-dlp...');
   return new Promise((resolve) => {
@@ -46,11 +40,59 @@ async function actualizarSistema() {
   });
 }
 
+// ── LIMPIEZA DE ARCHIVOS TEMPORALES VIEJOS (anti-caídas) ────────────────
+// Si el bot se cayó a mitad de una descarga, pueden quedar archivos
+// temp_audio_/temp_video_/temp_tiktok_ tirados ocupando disco. Se limpian
+// al arrancar para evitar que el disco se llene con el tiempo.
+function limpiarArchivosTemporalesViejos() {
+  try {
+    const archivos = fs.readdirSync(__dirname);
+    let borrados = 0;
+    for (const archivo of archivos) {
+      if (/^temp_(audio|video|tiktok)_/.test(archivo)) {
+        try { fs.unlinkSync(path.join(__dirname, archivo)); borrados++; } catch {}
+      }
+    }
+    if (borrados > 0) console.log(`🧹 Se limpiaron ${borrados} archivo(s) temporal(es) de una sesión anterior.`);
+  } catch (err) {
+    console.log('⚠️ No se pudo limpiar archivos temporales:', err.message);
+  }
+}
+
 // ── DETECTA ENLACES DE YOUTUBE ─────────────────────────────────
 const ENLACE_YOUTUBE = /(?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/shorts\/)([a-zA-Z0-9_-]{11})/;
-const MAX_INTENTOS_DESCARGA = 3;
+const MAX_INTENTOS_DESCARGA = 4;
+const DURACION_MAXIMA_SEGUNDOS = 15 * 60; // 15 minutos, aplica a audio Y video
 
-// ── DESCARGAR AUDIO CON REINTENTOS AUTOMÁTICOS ─────────────────
+// ── ROTACIÓN DE "PLAYER CLIENTS" ANTI-BLOQUEO ───────────────────────────
+// YouTube suele bloquear IPs de servidores/nube con "Sign in to confirm
+// you're not a bot". Un solo player_client no siempre esquiva el bloqueo,
+// así que en cada reintento se prueba con un cliente distinto. Esto no
+// cambia el comando para quien lo usa, solo hace la descarga más
+// confiable en Render/Termux/VPS.
+const CLIENTES_YOUTUBE_POR_INTENTO = [
+  'android',
+  'ios',
+  'android,web',
+  'tv_embedded,web'
+];
+function argsAntibloqueoPorIntento(intento) {
+  const cliente = CLIENTES_YOUTUBE_POR_INTENTO[(intento - 1) % CLIENTES_YOUTUBE_POR_INTENTO.length];
+  return `--extractor-args "youtube:player_client=${cliente}"`;
+}
+
+async function obtenerDuracionYoutube(url) {
+  return new Promise((resolve, reject) => {
+    exec(`"${RUTA_YTDLP}" --no-warnings ${argsAntibloqueoPorIntento(1)} --print duration "${url}"`, { timeout: 30000 }, (err, stdout) => {
+      if (err) return reject(err);
+      const segundos = parseInt(String(stdout).trim(), 10);
+      if (isNaN(segundos)) return reject(new Error('No se pudo leer la duración'));
+      resolve(segundos);
+    });
+  });
+}
+
+// ── DESCARGAR AUDIO CON REINTENTOS Y ROTACIÓN DE CLIENTE ────────────────
 async function descargarAudioYoutube(url) {
   const id = url.match(ENLACE_YOUTUBE)[1];
 
@@ -58,7 +100,7 @@ async function descargarAudioYoutube(url) {
     const archivo = path.join(__dirname, `temp_audio_${id}_${intento}.m4a`);
 
     try {
-      console.log(`🔄 Intento ${intento} de ${MAX_INTENTOS_DESCARGA}...`);
+      console.log(`🔄 [YouTube audio] Intento ${intento} de ${MAX_INTENTOS_DESCARGA} (cliente: ${CLIENTES_YOUTUBE_POR_INTENTO[(intento - 1) % CLIENTES_YOUTUBE_POR_INTENTO.length]})...`);
 
       await new Promise((resolve, reject) => {
         const cmd = [
@@ -68,7 +110,7 @@ async function descargarAudioYoutube(url) {
           '--retries', '5',
           '--socket-timeout', '30',
           '--no-check-certificates',
-          ARGS_YOUTUBE_ANTIBLOQUEO,
+          argsAntibloqueoPorIntento(intento),
           '-o', `"${archivo}"`,
           `"${url}"`
         ].filter(Boolean).join(' ');
@@ -87,7 +129,46 @@ async function descargarAudioYoutube(url) {
       return archivo;
 
     } catch (err) {
-      console.log(`❌ Intento ${intento} falló: ${err.message.slice(0,50)}`);
+      console.log(`❌ [YouTube audio] Intento ${intento} falló: ${err.message.slice(0, 80)}`);
+      if (fs.existsSync(archivo)) fs.unlinkSync(archivo);
+      if (intento < MAX_INTENTOS_DESCARGA) await new Promise(r => setTimeout(r, 4000));
+    }
+  }
+  throw new Error('Falló después de varios intentos');
+}
+async function descargarVideoYoutube(url) {
+  const id = url.match(ENLACE_YOUTUBE)[1];
+  for (let intento = 1; intento <= MAX_INTENTOS_DESCARGA; intento++) {
+    const archivo = path.join(__dirname, `temp_video_${id}_${intento}.mp4`);
+    try {
+      console.log(`🔄 [YouTube video] Intento ${intento} de ${MAX_INTENTOS_DESCARGA} (cliente: ${CLIENTES_YOUTUBE_POR_INTENTO[(intento - 1) % CLIENTES_YOUTUBE_POR_INTENTO.length]})...`);
+      await new Promise((resolve, reject) => {
+        const cmd = [
+          `"${RUTA_YTDLP}"`,
+          '-f', 'bv*[height<=720][ext=mp4]+ba[ext=m4a]/best[ext=mp4]/best',
+          '--no-playlist',
+          '--retries', '5',
+          '--socket-timeout', '30',
+          '--no-check-certificates',
+          '--merge-output-format', 'mp4',
+          argsAntibloqueoPorIntento(intento),
+          ARGS_FFMPEG,
+          '-o', `"${archivo}"`,
+          `"${url}"`
+        ].filter(Boolean).join(' ');
+        exec(cmd, { timeout: 180000 }, (err) => {
+          if (err) return reject(err);
+          if (fs.existsSync(archivo) && fs.statSync(archivo).size > 5000) resolve(archivo);
+          else reject(new Error('Archivo vacío o no descargado'));
+        });
+      });
+      for (let i = 1; i < intento; i++) {
+        const viejo = path.join(__dirname, `temp_video_${id}_${i}.mp4`);
+        if (fs.existsSync(viejo)) fs.unlinkSync(viejo);
+      }
+      return archivo;
+    } catch (err) {
+      console.log(`❌ [YouTube video] Intento ${intento} falló: ${err.message.slice(0, 80)}`);
       if (fs.existsSync(archivo)) fs.unlinkSync(archivo);
       if (intento < MAX_INTENTOS_DESCARGA) await new Promise(r => setTimeout(r, 4000));
     }
@@ -96,18 +177,10 @@ async function descargarAudioYoutube(url) {
 }
 
 // ── DETECTA ENLACES DE TIKTOK Y DESCARGA SIN MARCA DE AGUA ──────
-// Acepta el comando como "/tiktok" o "/tik tok" (con o sin espacio), en
-// mayúsculas o minúsculas.
 const PATRON_COMANDO_TIKTOK = /^\/tik\s*tok\b/i;
 const ENLACE_TIKTOK = /(?:https?:\/\/)?(?:www\.|vm\.|vt\.|m\.)?tiktok\.com\/[^\s]+/i;
 const MAX_INTENTOS_TIKTOK = 3;
 
-// SISTEMA AVANZADO (2 capas):
-// 1) yt-dlp descarga el video real sin marca de agua a disco. yt-dlp se
-//    autoactualiza en cada reinicio del bot (actualizarSistema), así que
-//    si TikTok cambia algo, se corrige solo la próxima vez que arranque.
-// 2) Si yt-dlp falla, se usa la API pública de tikwm.com como respaldo,
-//    que entrega un link directo sin descargar nada localmente.
 async function descargarVideoTiktokConYtDlp(url) {
   const idTemp = Date.now();
   for (let intento = 1; intento <= MAX_INTENTOS_TIKTOK; intento++) {
@@ -181,64 +254,6 @@ async function descargarVideoTiktok(url) {
     return { tipo: 'url', url: resultado.url, titulo: resultado.titulo };
   }
 }
-
-// ── DESCARGA DE VIDEO DE YOUTUBE (comando nuevo y aparte de /youtube) ───
-// /youtube sigue igual (solo audio). Este es un comando adicional para
-// descargar el video completo, limitado a 6 minutos para no generar
-// archivos gigantes.
-const DURACION_MAXIMA_VIDEO_SEGUNDOS = 6 * 60;
-
-async function obtenerDuracionYoutube(url) {
-  return new Promise((resolve, reject) => {
-    exec(`"${RUTA_YTDLP}" --no-warnings ${ARGS_YOUTUBE_ANTIBLOQUEO} --print duration "${url}"`, { timeout: 30000 }, (err, stdout) => {
-      if (err) return reject(err);
-      const segundos = parseInt(String(stdout).trim(), 10);
-      if (isNaN(segundos)) return reject(new Error('No se pudo leer la duración'));
-      resolve(segundos);
-    });
-  });
-}
-
-async function descargarVideoYoutube(url) {
-  const id = url.match(ENLACE_YOUTUBE)[1];
-  for (let intento = 1; intento <= MAX_INTENTOS_DESCARGA; intento++) {
-    const archivo = path.join(__dirname, `temp_video_${id}_${intento}.mp4`);
-    try {
-      console.log(`🔄 [YouTube video] Intento ${intento} de ${MAX_INTENTOS_DESCARGA}...`);
-      await new Promise((resolve, reject) => {
-        const cmd = [
-          `"${RUTA_YTDLP}"`,
-          '-f', 'bv*[height<=720][ext=mp4]+ba[ext=m4a]/best[ext=mp4]/best',
-          '--no-playlist',
-          '--retries', '5',
-          '--socket-timeout', '30',
-          '--no-check-certificates',
-          '--merge-output-format', 'mp4',
-          ARGS_YOUTUBE_ANTIBLOQUEO,
-          ARGS_FFMPEG,
-          '-o', `"${archivo}"`,
-          `"${url}"`
-        ].filter(Boolean).join(' ');
-        exec(cmd, { timeout: 180000 }, (err) => {
-          if (err) return reject(err);
-          if (fs.existsSync(archivo) && fs.statSync(archivo).size > 5000) resolve(archivo);
-          else reject(new Error('Archivo vacío o no descargado'));
-        });
-      });
-      for (let i = 1; i < intento; i++) {
-        const viejo = path.join(__dirname, `temp_video_${id}_${i}.mp4`);
-        if (fs.existsSync(viejo)) fs.unlinkSync(viejo);
-      }
-      return archivo;
-    } catch (err) {
-      console.log(`❌ [YouTube video] Intento ${intento} falló: ${err.message.slice(0, 80)}`);
-      if (fs.existsSync(archivo)) fs.unlinkSync(archivo);
-      if (intento < MAX_INTENTOS_DESCARGA) await new Promise(r => setTimeout(r, 4000));
-    }
-  }
-  throw new Error('Falló después de varios intentos');
-}
-
 const CLAVE_IA_PRINCIPAL = process.env.CLAVE_IA_PRINCIPAL;
 const CLAVE_IA_RESPALDO = process.env.CLAVE_IA_RESPALDO;
 const CLAVE_IA_RESPALDO2 = process.env.CLAVE_IA_RESPALDO2;
@@ -249,14 +264,13 @@ const MODELO_IMAGEN = process.env.MODELO_IMAGEN || 'gemini-3.1-flash-image';
 const CODIGO_DUEÑO = '2927760128';
 const NOMBRE_BOT = 'Anzy';
 const CREADOR = 'Albert Oficial';
-const VERSION_BOT = '2.02.0';
+const VERSION_BOT = '2.03.0';
 const TU_NUMERO = '51996399291';
 const JID_DUEÑO = `${TU_NUMERO}@s.whatsapp.net`;
 const PUERTO = process.env.PORT || 3000;
 const LIMITE_DIARIO_ESTIMADO = 1400;
-const MAX_TOKENS_RESPUESTA = 1500;
+const MAX_TOKENS_RESPUESTA = 500;
 
-// Único comando explícito para llamar a la IA (además de mencionar al bot)
 const COMANDO_LLAMADA_IA = '/anzy';
 
 if (!CLAVE_IA_PRINCIPAL) {
@@ -281,8 +295,8 @@ const TEXTO_AYUDA = `╔══════════════════�
 • /frase — frase random
 • /meme — meme en español
 • /perfil @usuario — actividad en el grupo
-• /youtube <enlace> — descarga audio de YouTube 🎵
-• /youtubevideo <enlace> — descarga el video de YouTube (máx. 6 min) 🎬
+• /youtube <enlace> — descarga audio de YouTube (máx. 15 min) 🎵
+• /youtubevideo <enlace> — descarga el video de YouTube (máx. 15 min) 🎬
 • /tiktok <enlace> — descarga video de TikTok sin marca de agua (también /tik tok) 🎬
 • /encuesta pregunta; opción1; opción2 — encuesta nativa
 
@@ -293,11 +307,11 @@ const TEXTO_AYUDA = `╔══════════════════�
 • /todos <mensaje> — etiqueta a todos
 • /cerrar · /abrir — controla quién escribe
 • /recordatorio <minutos> <texto> — aviso al grupo
-• /ranking — top de más activos
+• /ranking — top de más activas del grupo
 • /movimiento — últimos movimientos de admins 🗂️
 
 👥 *Clan*
-• /integrantes — lista de integrantes registrados (solo admins)
+• /integrantes — lista de integrantes registradas (solo admins)
 
 📋 *Información*
 • /info · /creador · /reglas · /reglaspvp
@@ -334,12 +348,9 @@ const SAFETY_SETTINGS = [
   { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_MEDIUM_AND_ABOVE' }
 ];
 
-// ── PERSONALIDAD DE LA IA ───────────────────────────────────────
-// Femenina, amable, detallada, con emojis con medida, sin groserías,
-// habla de su creador con respeto/gratitud, y se presenta como una
-// creación de él (no como la dueña del bot ni del negocio).
+// ── PERSONALIDAD DE LA IA (100% femenina, sin jerga tipo "causa") ──────
 const REGLAS_IA_BASE = `
-Eres ${NOMBRE_BOT}, una asistente virtual femenina, creada por ${CREADOR}. Hablas de ti misma en femenino, con un tono cálido, amable, cercano y con un toque peruano suave — pero SIEMPRE educado. Jamás eres grosera, cortante ni usas insultos o groserías.
+Eres ${NOMBRE_BOT}, una asistente virtual femenina, creada por ${CREADOR}. Hablas de ti misma en femenino, con un tono cálido, amable, cercano y dulce — pero SIEMPRE educado. Jamás eres grosera, cortante ni usas insultos, groserías o jerga como "causa", "pata", "brother" o similares.
 
 CONTEXTO: estás respondiendo dentro de un grupo de WhatsApp, puede haber varias personas leyendo.
 
@@ -354,17 +365,16 @@ CÓMO ERES:
 ✅ Usas emojis con soltura pero sin exagerar (2 a 4 por respuesta suele estar bien).
 ✅ Hablas como una creación de ${CREADOR} — nunca como si tú fueras la dueña del bot o de algún negocio.
 
-❌ NUNCA seas grosera ni uses groserías o insultos.
+❌ NUNCA seas grosera ni uses groserías, insultos o jerga masculina/callejera.
 ❌ Nunca respondas con evasivas del tipo "mejor ve a jugar" — siempre contesta lo que te preguntan, con detalle.
 ❌ No hables de venta de archivos, hacks, hologramas, aimbot, regedit ni nada parecido.
-❌ Nunca suenes como robot ni acartonada; sé natural y cercana.
+❌ Nunca suenes como robot ni acartonada; sé natural, cercana y siempre femenina en tu forma de hablar.
 
 📏 LARGO: normalmente 3 a 6 líneas, pero si la pregunta es técnica o necesita más explicación, puedes extenderte para ser realmente útil.
 
 🚨 CRISIS REAL: si alguien menciona autolesión o suicidio, deja de lado cualquier tono ligero, responde con calidez genuina y anímalo a hablar con alguien de confianza o un profesional.
 `;
 
-// Mensajes de espera cuando la IA falla — tono femenino y cercano, sin groserías.
 const MENSAJES_ESPERA = [
   '💫 Uy, dame un segundito, se me cruzaron las ideas pero ya vuelvo 🥰',
   '🌸 Ando reiniciando mis pensamientos, espérame un ratito porfa 💕',
@@ -414,7 +424,6 @@ function olvidarUsuario(jidUsuario) {
   delete memoriaPersistente[jidUsuario];
   guardarMemoria();
 }
-
 const contadorMensajesGrupo = new Map();
 function registrarMensajeGrupo(jidGrupo, jidUsuario) {
   if (!contadorMensajesGrupo.has(jidGrupo)) contadorMensajesGrupo.set(jidGrupo, new Map());
@@ -531,7 +540,7 @@ function obtenerIdentificadoresBot(sock) {
 function esMencionAlBot(msg, texto, identificadoresBot) {
   const mencionados = msg.message.extendedTextMessage?.contextInfo?.mentionedJid || [];
   const numerosMencionados = mencionados.map(j => j.split('@')[0]);
-if (numerosMencionados.some(n => identificadoresBot.includes(n))) return true;
+  if (numerosMencionados.some(n => identificadoresBot.includes(n))) return true;
   return identificadoresBot.some(id => texto.includes(`@${id}`));
 }
 
@@ -625,8 +634,6 @@ async function inicializarNubeIntegrantes() {
     console.log('⚠️ No se pudo conectar con JSONBin, sigo usando el respaldo local:', err.message);
   }
 }
-
-// ── INTEGRANTES DEL CLAN (ficha por miembro, por grupo) ───────────────────
 const ARCHIVO_INTEGRANTES = path.join(__dirname, 'integrantes.json');
 function cargarIntegrantes() {
   try { return JSON.parse(fs.readFileSync(ARCHIVO_INTEGRANTES, 'utf-8')); }
@@ -647,7 +654,6 @@ function guardarIntegrantes() {
   }, 1500);
 }
 
-// ── MOVIMIENTOS DE ADMIN (antes "auditoría") ───────────────────────────────
 const ARCHIVO_MOVIMIENTOS = path.join(__dirname, 'movimientos.json');
 const MAX_REGISTROS_MOVIMIENTOS = 300;
 function cargarMovimientos() {
@@ -711,27 +717,27 @@ function registrarAccionAdmin(sock, jidGrupo, accionOriginal, jidEjecutor, jidsO
 function comandoMatrimonio(mencionados) {
   if (mencionados.length < 2) return { texto: 'Menciona a los dos: /matrimonio @novio @novia', mentions: [] };
   const [a, b] = mencionados;
-  const texto = `💍 *CERTIFICADO DE MATRIMONIO* 💍\n\nPor la presente, @${a.split('@')[0]} y @${b.split('@')[0]} quedan unidos en santo matrimonio grupal.\n\n¡Felicidades a los novios! 🎉🥂`;
+  const texto = `💍 *CERTIFICADO DE MATRIMONIO* 💍\n\nPor la presente, @${a.split('@')[0]} y @${b.split('@')[0]} quedan unidas en santo matrimonio grupal.\n\n¡Felicidades a la pareja! 🎉🥂`;
   return { texto, mentions: [a, b] };
 }
 
 const FRASES_RANDOM = [
   'La constancia le gana al talento cuando el talento no es constante 💪',
-  'Causa, hoy es un buen día para no rendirte 🔥',
-  'El que no arriesga, no jala pescado 🐟',
-  'Mejor solo que mal acompañado, mejor acompañado que aburrido 😂'
+  'Hoy es un buen día para no rendirte 🌸',
+  'El que no arriesga, no gana nada bonito 🐟',
+  'Mejor sola que mal acompañada, mejor acompañada que aburrida 💕'
 ];
 function comandoFrase() { return FRASES_RANDOM[Math.floor(Math.random() * FRASES_RANDOM.length)]; }
 
 const FRASES_DESPEDIDA = [
-  'Se fue @NUM... ni el grupo lo va a extrañar mucho la verdad 💀',
-  '@NUM se fugó, seguro fue a buscar personalidad 😂',
-  'Uno menos hueveando por acá, chau @NUM 😏',
+  'Se fue @NUM... el grupo seguirá brillando igual 💅',
+  '@NUM se fue, seguro anda buscando dónde brillar más 😌',
+  'Una persona menos hueveando por acá, chau @NUM 💕',
   '@NUM desapareció más rápido que la plata en quincena 💸😂',
   'Se fue @NUM, ya se extrañaba la paz por acá 😌✌️',
-  '@NUM salió disparado, ni Flash corre así 💀🔥',
-  'Adiós @NUM, no le avises a nadie que se fue, capaz ni notan la diferencia 😂',
-  'Chau @NUM, la puerta queda abierta pero no se ve que la vayas a necesitar de nuevo 👋'
+  '@NUM salió disparada, ni Flash corre así 💀🔥',
+  'Adiós @NUM, no le avisen a nadie que se fue, capaz ni notan la diferencia 😂',
+  'Chau @NUM, la puerta queda abierta pero no creo que la necesites de nuevo 👋'
 ];
 function comandoDespedidaAleatoria(numero) {
   const base = FRASES_DESPEDIDA[Math.floor(Math.random() * FRASES_DESPEDIDA.length)];
@@ -775,12 +781,12 @@ async function comandoRanking(sock, jidGrupo) {
   if (!mapa || mapa.size === 0) return { texto: 'Aún no hay suficiente actividad para armar un ranking 📊', mentions: [] };
   const ordenado = [...mapa.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
   const mentions = ordenado.map(([jid]) => jid);
-  const texto = '🏆 *Ranking de más activos:*\n' + ordenado.map(([jid, n], i) => `${i + 1}. @${jid.split('@')[0]} — ${n} msjs`).join('\n');
+  const texto = '🏆 *Ranking de más activas:*\n' + ordenado.map(([jid, n], i) => `${i + 1}. @${jid.split('@')[0]} — ${n} msjs`).join('\n');
   return { texto, mentions };
 }
 
 async function esAdminGrupo(sock, jidGrupo, jidUsuario) {
-try {
+  try {
     const metadata = await sock.groupMetadata(jidGrupo);
     const numeroObjetivo = extraerNumero(jidUsuario);
     const participante = metadata.participants.find(p => {
@@ -838,7 +844,7 @@ function buscarIntegrante(jidGrupo, criterio) {
 }
 
 function obtenerEtiquetaPersona(jidGrupo, criterio) {
-  if (!criterio) return 'Desconocido';
+  if (!criterio) return 'Desconocida';
   const numero = extraerNumero(criterio) || criterio;
   const ficha = buscarIntegrante(jidGrupo, numero);
   if (ficha) return `${ficha.apodo || ficha.nombre} (+${numero})`;
@@ -858,7 +864,7 @@ function formatearFichaIntegrante(ficha, posicion) {
 function generarTextoListaClan(jidGrupo) {
   const lista = integrantesClan[jidGrupo] || [];
   if (!lista.length) {
-    return '📋 Aún no hay integrantes registrados en el clan.';
+    return '📋 Aún no hay integrantes registradas en el clan.';
   }
   const cuerpo = lista.map((ficha, i) => formatearFichaIntegrante(ficha, i + 1)).join('\n\n');
   return `╔═══════════════════════╗\n   INTEGRANTES DEL CLAN (${lista.length})\n╚═══════════════════════╝\n\n${cuerpo}`;
@@ -866,7 +872,7 @@ function generarTextoListaClan(jidGrupo) {
 
 async function comandoClanAgregar(sock, jidGrupo, jidUsuario, textoCompleto) {
   if (!(await esAdminGrupo(sock, jidGrupo, jidUsuario))) {
-    await sock.sendMessage(jidGrupo, { text: 'Solo los admins pueden registrar integrantes 🚫' });
+    await sock.sendMessage(jidGrupo, { text: 'Solo las admins pueden registrar integrantes 🚫' });
     return;
   }
   const partes = textoCompleto.split(';').map(p => p.trim()).filter(Boolean);
@@ -877,17 +883,17 @@ async function comandoClanAgregar(sock, jidGrupo, jidUsuario, textoCompleto) {
   const [nombre, numero, idFF, apodo] = partes;
   const { actualizado, ficha } = agregarIntegrante(jidGrupo, { nombre, numero, idFF, apodo, agregadoPor: jidUsuario.split('@')[0] });
   const posicion = integrantesClan[jidGrupo].indexOf(ficha) + 1;
-  await sock.sendMessage(jidGrupo, { text: `${actualizado ? '✏️ Ficha actualizada' : '✅ Integrante registrado'}:\n\n${formatearFichaIntegrante(ficha, posicion)}` });
+  await sock.sendMessage(jidGrupo, { text: `${actualizado ? '✏️ Ficha actualizada' : '✅ Integrante registrada'}:\n\n${formatearFichaIntegrante(ficha, posicion)}` });
 }
 
 async function comandoClanQuitar(sock, jidGrupo, jidUsuario, criterio) {
   if (!(await esAdminGrupo(sock, jidGrupo, jidUsuario))) {
-    await sock.sendMessage(jidGrupo, { text: 'Solo los admins pueden quitar integrantes 🚫' });
+    await sock.sendMessage(jidGrupo, { text: 'Solo las admins pueden quitar integrantes 🚫' });
     return;
   }
   if (!criterio) { await sock.sendMessage(jidGrupo, { text: 'Uso: /clan quitar <número o ID FF>' }); return; }
   const ok = quitarIntegrante(jidGrupo, criterio);
-  await sock.sendMessage(jidGrupo, { text: ok ? '🗑️ Integrante eliminado de la lista.' : 'No encontré a nadie con ese número o ID FF.' });
+  await sock.sendMessage(jidGrupo, { text: ok ? '🗑️ Integrante eliminada de la lista.' : 'No encontré a nadie con ese número o ID FF.' });
 }
 
 async function comandoClanVer(sock, jidGrupo, criterio) {
@@ -898,7 +904,6 @@ async function comandoClanVer(sock, jidGrupo, criterio) {
   await sock.sendMessage(jidGrupo, { text: formatearFichaIntegrante(ficha, posicion) });
 }
 
-// ── REGISTRO POR PARTES: /nombre agg, /numero agg, /id ff agg, /apodo agg ──
 const borradoresIntegrante = new Map();
 function claveBorrador(jidGrupo, jidUsuario) { return `${jidGrupo}:${jidUsuario}`; }
 
@@ -918,7 +923,7 @@ const ETIQUETAS_CAMPO_BORRADOR = { nombre: '/nombre agg', numero: '/numero agg',
 
 async function comandoCampoIntegrante(sock, jidGrupo, jidUsuario, campo, valor) {
   if (!(await esAdminGrupo(sock, jidGrupo, jidUsuario))) {
-    await sock.sendMessage(jidGrupo, { text: 'Solo los admins pueden registrar integrantes 🚫' });
+    await sock.sendMessage(jidGrupo, { text: 'Solo las admins pueden registrar integrantes 🚫' });
     return;
   }
   if (!valor) {
@@ -933,7 +938,7 @@ async function comandoCampoIntegrante(sock, jidGrupo, jidUsuario, campo, valor) 
     });
     borradoresIntegrante.delete(claveBorrador(jidGrupo, jidUsuario));
     const posicion = integrantesClan[jidGrupo].indexOf(ficha) + 1;
-    await sock.sendMessage(jidGrupo, { text: `${actualizado ? '✏️ Ficha actualizada' : '✅ ¡Integrante registrado!'} 💖\n\n${formatearFichaIntegrante(ficha, posicion)}` });
+    await sock.sendMessage(jidGrupo, { text: `${actualizado ? '✏️ Ficha actualizada' : '✅ ¡Integrante registrada!'} 💖\n\n${formatearFichaIntegrante(ficha, posicion)}` });
   } else {
     const faltan = ['nombre', 'numero', 'idFF', 'apodo'].filter(c => !borrador[c]).map(c => ETIQUETAS_CAMPO_BORRADOR[c]);
     await sock.sendMessage(jidGrupo, { text: `📝 Anoté "${valor}" ✅\n\nMe falta: ${faltan.join(', ')}` });
@@ -958,7 +963,7 @@ function formatearMovimiento(jidGrupo, r) {
 
 async function comandoMovimientos(sock, jidGrupo, jidUsuario, argumentoTexto) {
   if (!(await esAdminGrupo(sock, jidGrupo, jidUsuario))) {
-    await sock.sendMessage(jidGrupo, { text: 'Solo los admins pueden ver los movimientos del grupo 🚫' });
+    await sock.sendMessage(jidGrupo, { text: 'Solo las admins pueden ver los movimientos del grupo 🚫' });
     return;
   }
   const numeroEncontrado = (argumentoTexto.match(/\d+/) || [])[0];
@@ -971,10 +976,9 @@ async function comandoMovimientos(sock, jidGrupo, jidUsuario, argumentoTexto) {
   const cuerpo = registros.map(r => formatearMovimiento(jidGrupo, r)).join('\n\n');
   await sock.sendMessage(jidGrupo, { text: `╔═══════════════════════╗\n  ÚLTIMOS MOVIMIENTOS\n╚═══════════════════════╝\n\n${cuerpo}` });
 }
-
 async function comandoKick(sock, jidGrupo, jidUsuario, mencionados) {
   if (!(await esAdminGrupo(sock, jidGrupo, jidUsuario))) {
-    await sock.sendMessage(jidGrupo, { text: 'Solo los admins del grupo pueden usar este comando causa 🚫' });
+    await sock.sendMessage(jidGrupo, { text: 'Solo las admins del grupo pueden usar este comando 🚫' });
     return;
   }
   if (!mencionados.length) {
@@ -987,13 +991,13 @@ async function comandoKick(sock, jidGrupo, jidUsuario, mencionados) {
     registrarAccionAdmin(sock, jidGrupo, 'remove', jidUsuario, mencionados);
     await sock.sendMessage(jidGrupo, { text: `👋 Listo, saqué a ${mencionados.length} del grupo.` });
   } catch (err) {
-    await sock.sendMessage(jidGrupo, { text: 'No pude sacarlo, revisa que el bot sea admin del grupo 🙏' });
+    await sock.sendMessage(jidGrupo, { text: 'No pude sacarla, revisa que el bot sea admin del grupo 🙏' });
   }
 }
 
 async function comandoPromoverDegradar(sock, jidGrupo, jidUsuario, mencionados, accion) {
   if (!(await esAdminGrupo(sock, jidGrupo, jidUsuario))) {
-    await sock.sendMessage(jidGrupo, { text: 'Solo los admins pueden usar este comando 🚫' });
+    await sock.sendMessage(jidGrupo, { text: 'Solo las admins pueden usar este comando 🚫' });
     return;
   }
   if (!mencionados.length) {
@@ -1012,13 +1016,13 @@ async function comandoPromoverDegradar(sock, jidGrupo, jidUsuario, mencionados, 
 
 async function comandoTodos(sock, jidGrupo, jidUsuario, mensajeExtra) {
   if (!(await esAdminGrupo(sock, jidGrupo, jidUsuario))) {
-    await sock.sendMessage(jidGrupo, { text: 'Solo los admins pueden usar /todos 🚫' });
+    await sock.sendMessage(jidGrupo, { text: 'Solo las admins pueden usar /todos 🚫' });
     return;
   }
   try {
     const metadata = await sock.groupMetadata(jidGrupo);
     const jids = metadata.participants.map(p => p.id);
-    const texto = mensajeExtra ? `📢 ${mensajeExtra}` : '📢 ¡Atención a todos!';
+    const texto = mensajeExtra ? `📢 ${mensajeExtra}` : '📢 ¡Atención a todas!';
     const menciones = jids.map(j => `@${j.split('@')[0]}`).join(' ');
     await sock.sendMessage(jidGrupo, { text: `${texto}\n\n${menciones}`, mentions: jids });
   } catch (err) {
@@ -1034,7 +1038,7 @@ async function comandoCerrarGrupo(sock, jidGrupo, jidUsuario, cerrar) {
   try {
     await sock.groupSettingUpdate(jidGrupo, cerrar ? 'announcement' : 'not_announcement');
     registrarAccionAdmin(sock, jidGrupo, cerrar ? 'cerrar' : 'abrir', jidUsuario, []);
-    await sock.sendMessage(jidGrupo, { text: cerrar ? '🔒 Grupo cerrado, solo admins escriben.' : '🔓 Grupo abierto para todos.' });
+    await sock.sendMessage(jidGrupo, { text: cerrar ? '🔒 Grupo cerrado, solo admins escriben.' : '🔓 Grupo abierto para todas.' });
   } catch (err) {
     await sock.sendMessage(jidGrupo, { text: 'No pude cambiar la configuración, revisa que el bot sea admin.' });
   }
@@ -1042,7 +1046,7 @@ async function comandoCerrarGrupo(sock, jidGrupo, jidUsuario, cerrar) {
 
 function generarTextoInfo() {
   const uptimeH = ((Date.now() - estado.inicio) / 3600000).toFixed(1);
-return `🤖 *${NOMBRE_BOT}* — v${VERSION_BOT}
+  return `🤖 *${NOMBRE_BOT}* — v${VERSION_BOT}
 
 👨‍💻 Creada por: *${CREADOR}*, ingeniero de sistemas y estudiante de programación.
 🟢 Estado: ${estado.conectado ? 'Conectada y activa' : 'Desconectada'}
@@ -1058,9 +1062,9 @@ const TEXTO_REGLAS = `╔══════════════════�
                           DEL CLAN 🏆
 ╚════════════════════════╝
 
-Bienvenido al clan. [STX] OFICIAL
+Bienvenida al clan. [STX] OFICIAL
 
-El objetivo de este reglamento es mantener el orden, el respeto y la competitividad entre todos los integrantes. Al permanecer en el clan, cada miembro acepta cumplir las siguientes normas.
+El objetivo de este reglamento es mantener el orden, el respeto y la competitividad entre todas las integrantes. Al permanecer en el clan, cada miembro acepta cumplir las siguientes normas.
 
 ━━━━━━━━━━━━━━━━━━━━━━
 🚫 REGLAS NO PERMITIDAS
@@ -1079,9 +1083,9 @@ El objetivo de este reglamento es mantener el orden, el respeto y la competitivi
 
 ✔ Mantener una participación activa dentro del clan.
 ✔ Obtener un mínimo de *2,000 placas por semana*.
-✔ Participar en guerras de clanes, torneos y partidas amistosas cuando sea convocado.
-✔ Mantenerse atento a los anuncios y comunicados oficiales.
-✔ Cualquier duda, sugerencia o reclamo deberá dirigirse únicamente a los administradores.
+✔ Participar en guerras de clanes, torneos y partidas amistosas cuando sea convocada.
+✔ Mantenerse atenta a los anuncios y comunicados oficiales.
+✔ Cualquier duda, sugerencia o reclamo deberá dirigirse únicamente a las administradoras.
 ✔ El cambio de iniciales del clan solo podrá realizarse después de un período mínimo de *3 meses*.
 
 ━━━━━━━━━━━━━━━━━━━━━━
@@ -1089,10 +1093,10 @@ El objetivo de este reglamento es mantener el orden, el respeto y la competitivi
 ━━━━━━━━━━━━━━━━━━━━━━
 
 💎 *100 Diamantes*
-Para el jugador más destacado de la semana.
+Para la jugadora más destacada de la semana.
 
 🔥 *300 Diamantes*
-Todo miembro que consiga *25,000 placas durante la semana* recibirá una recompensa de *300 diamantes*, previa verificación por parte de la administración.
+Toda integrante que consiga *25,000 placas durante la semana* recibirá una recompensa de *300 diamantes*, previa verificación por parte de la administración.
 
 🎫 *Pase Élite*
 Se realizará un sorteo de *1 Pase Élite* el día *28 de cada mes*.
@@ -1101,7 +1105,7 @@ Se realizará un sorteo de *1 Pase Élite* el día *28 de cada mes*.
 Cada integrante de la escuadra ganadora recibirá *100 diamantes*.
 
 🏆 *Reconocimiento Semanal*
-El jugador con mayor cantidad de placas será reconocido como el mejor miembro de la semana.
+La jugadora con mayor cantidad de placas será reconocida como la mejor integrante de la semana.
 
 ━━━━━━━━━━━━━━━━━━━━━━
 ⚠ SISTEMA DE SANCIONES
@@ -1123,7 +1127,7 @@ El incumplimiento de cualquiera de las normas podrá ser sancionado por la admin
 
 const TEXTO_REGLAS_PVP = `⚔ REGLAMENTO OFICIAL DE PVP ⚔
 
-Los PVP del clan están diseñados para demostrar únicamente la habilidad de cada jugador.
+Los PVP del clan están diseñados para demostrar únicamente la habilidad de cada jugadora.
 
 🚫 Queda estrictamente prohibido el uso de cualquier tipo de ventaja ilegal, incluyendo:
 • Fake Lag.
@@ -1157,11 +1161,11 @@ No se permitirá el uso de armas distintas a las mencionadas.
 ━━━━━━━━━━━━━━━━━━━━━━
 
 • Está prohibido encerrarse durante el enfrentamiento.
-• No está permitido dejar morir al rival por la zona.
+• No está permitido dejar morir a la rival por la zona.
 • Cada enfrentamiento deberá realizarse respetando el orden establecido.
 • Los combates serán *1 vs 1*.
-• Ningún integrante podrá intervenir en el duelo de otro compañero.
-• Está estrictamente prohibido que dos o más jugadores ataquen a un solo rival.
+• Ninguna integrante podrá intervenir en el duelo de otra compañera.
+• Está estrictamente prohibido que dos o más jugadoras ataquen a una sola rival.
 
 El incumplimiento de cualquiera de estas reglas ocasionará que el enfrentamiento sea declarado *NO VÁLIDO*.
 
@@ -1205,21 +1209,21 @@ async function procesarComandoJefe(sock, remitente, texto) {
 async function procesarMensajeGrupo(sock, msg, identificadoresBot) {
   const jidGrupo = msg.key.remoteJid;
   const jidUsuario = msg.key.participant || msg.key.remoteJid;
-  const nombreContacto = msg.pushName || 'amig@';
+  const nombreContacto = msg.pushName || 'amiga';
   const texto = (msg.message.conversation || msg.message.extendedTextMessage?.text || '').trim();
   if (!texto) return;
 
   registrarMensajeGrupo(jidGrupo, jidUsuario);
   const textoLower = texto.toLowerCase();
 
-  // ✅ DESCARGAR VIDEO DE YOUTUBE CON /youtubevideo (máx. 6 min, mayúsc/minúsc)
+  // ✅ DESCARGAR VIDEO DE YOUTUBE CON /youtubevideo (máx. 15 min)
   const esComandoYoutubeVideo = /^\/youtubevideo(\s|$)/i.test(texto);
   if (esComandoYoutubeVideo) {
     const enlace = texto.replace(/^\/youtubevideo\s*/i, '').trim();
 
     if (!ENLACE_YOUTUBE.test(enlace)) {
       await sock.sendMessage(jidGrupo, {
-        text: '💖 Escríbelo así:\n/youtubevideo enlace-de-youtube\n(el video debe durar 6 minutos o menos) ✨'
+        text: '💖 Escríbelo así:\n/youtubevideo enlace-de-youtube\n(el video debe durar 15 minutos o menos) ✨'
       });
       return;
     }
@@ -1233,8 +1237,8 @@ async function procesarMensajeGrupo(sock, msg, identificadoresBot) {
       await sock.sendMessage(jidGrupo, { text: '💔 No pude revisar ese video, intenta con otro enlace 🙏' });
       return;
     }
-    if (duracion > DURACION_MAXIMA_VIDEO_SEGUNDOS) {
-      await sock.sendMessage(jidGrupo, { text: '⏱️ Ese video dura más de 6 minutos, así que por ahora no lo puedo descargar. Prueba con uno más corto 🙏💖' });
+    if (duracion > DURACION_MAXIMA_SEGUNDOS) {
+      await sock.sendMessage(jidGrupo, { text: '⏱️ Ese video dura más de 15 minutos, así que por ahora no lo puedo descargar. Prueba con uno más corto 🙏💖' });
       return;
     }
 
@@ -1258,15 +1262,29 @@ async function procesarMensajeGrupo(sock, msg, identificadoresBot) {
     return;
   }
 
-  // ✅ DESCARGAR AUDIO DE YOUTUBE CON /youtube (mayúsc/minúsc) — sin cambios
+  // ✅ DESCARGAR AUDIO DE YOUTUBE CON /youtube (máx. 15 min, ahora con verificación previa)
   const esComandoYoutube = /^\/youtube(\s|$)/i.test(texto);
   if (esComandoYoutube) {
     const enlace = texto.replace(/^\/youtube\s*/i, '').trim();
 
     if (!ENLACE_YOUTUBE.test(enlace)) {
       await sock.sendMessage(jidGrupo, {
-        text: '💖 Por favor escríbelo así:\n/youtube enlace-de-youtube\nY con gusto te lo preparo ✨'
+        text: '💖 Por favor escríbelo así:\n/youtube enlace-de-youtube\n(el audio debe durar 15 minutos o menos) ✨'
       });
+      return;
+    }
+
+    await sock.sendMessage(jidGrupo, { text: '🔎 Dame un segundito, estoy revisando la duración 💖' });
+
+    let duracionAudio;
+    try {
+      duracionAudio = await obtenerDuracionYoutube(enlace);
+    } catch (err) {
+      await sock.sendMessage(jidGrupo, { text: '💔 No pude revisar ese video, intenta con otro enlace 🙏' });
+      return;
+    }
+    if (duracionAudio > DURACION_MAXIMA_SEGUNDOS) {
+      await sock.sendMessage(jidGrupo, { text: '⏱️ Ese video dura más de 15 minutos, así que por ahora no puedo sacarle el audio. Prueba con uno más corto 🙏💖' });
       return;
     }
 
@@ -1306,7 +1324,7 @@ async function procesarMensajeGrupo(sock, msg, identificadoresBot) {
         text: '💕 Escríbelo así:\n/tiktok enlace-de-tiktok\n(también funciona /tik tok)\nY te lo bajo sin marca de agua ✨'
       });
       return;
-}
+    }
 
     await sock.sendMessage(jidGrupo, {
       text: '🎬 ¡Claro que sí! Dame un momentito, te preparo tu video sin marca de agua 💖'
@@ -1346,7 +1364,6 @@ async function procesarMensajeGrupo(sock, msg, identificadoresBot) {
     return;
   }
 
-  // ── COMANDOS DE REGISTRO POR PARTES DEL CLAN (case-insensitive) ─────────
   const matchNombre = texto.match(/^\/nombre\s+agg\s+(.+)/i);
   if (matchNombre) { await comandoCampoIntegrante(sock, jidGrupo, jidUsuario, 'nombre', matchNombre[1].trim()); return; }
 
@@ -1361,7 +1378,7 @@ async function procesarMensajeGrupo(sock, msg, identificadoresBot) {
 
   if (textoLower === '/integrantes') {
     if (!(await esAdminGrupo(sock, jidGrupo, jidUsuario))) {
-      await sock.sendMessage(jidGrupo, { text: 'Solo los admins pueden ver la lista del clan 🚫' });
+      await sock.sendMessage(jidGrupo, { text: 'Solo las admins pueden ver la lista del clan 🚫' });
       return;
     }
     await sock.sendMessage(jidGrupo, { text: generarTextoListaClan(jidGrupo) });
@@ -1481,7 +1498,7 @@ function registrarBienvenidasYDespedidas(sock) {
           let fotoUrl = null;
           try { fotoUrl = await sock.profilePictureUrl(jidParticipante, 'image'); } catch (err) { fotoUrl = null; }
 
-          const texto = `🎉 ¡Bienvenid@ al grupo, @${numero}! Espero la pases chévere por acá 🙌`;
+          const texto = `🎉 ¡Bienvenida al grupo, @${numero}! Espero la pases chévere por acá 🙌`;
 
           if (fotoUrl) {
             await sock.sendMessage(jidGrupo, { image: { url: fotoUrl }, caption: texto, mentions: [jidParticipante] });
@@ -1507,7 +1524,6 @@ function registrarBienvenidasYDespedidas(sock) {
     }
   });
 }
-
 const estado = {
   conectado: false, inicio: Date.now(), mensajesRecibidos: 0, mensajesEnviados: 0,
   ultimoQR: null, intentosReconexion: 0, ultimoError: null
@@ -1522,6 +1538,7 @@ const almacenMensajes = new Map();
 let nubeInicializada = false;
 
 async function iniciarBot() {
+  limpiarArchivosTemporalesViejos();
   await actualizarSistema();
 
   if (!nubeInicializada) {
@@ -1568,7 +1585,7 @@ async function iniciarBot() {
       estado.intentosReconexion++;
       setTimeout(() => iniciarBot(), calcularEsperaReconexion(estado.intentosReconexion));
     }
-});
+  });
 
   sock.ev.on('messages.upsert', async m => {
     if (m.type !== 'notify') return;
@@ -1637,8 +1654,8 @@ const LISTA_COMANDOS_PANEL = [
   ]},
   { cat: '🎉 Diversión', items: [
     ['/matrimonio @user1 @user2', 'Certificado de boda grupal'],
-    ['/youtube <enlace>', 'Descarga audio de YouTube 🎵'],
-    ['/youtubevideo <enlace>', 'Descarga video de YouTube (máx. 6 min) 🎬'],
+    ['/youtube <enlace>', 'Descarga audio de YouTube (máx. 15 min) 🎵'],
+    ['/youtubevideo <enlace>', 'Descarga video de YouTube (máx. 15 min) 🎬'],
     ['/tiktok · /tik tok <enlace>', 'Descarga video de TikTok sin marca de agua 🎬'],
     ['/frase', 'Frase random'],
     ['/meme', 'Meme en español'],
@@ -1652,7 +1669,7 @@ const LISTA_COMANDOS_PANEL = [
     ['/cerrar · /abrir', 'Controla quién escribe'],
     ['/encuesta preg; op1; op2', 'Encuesta nativa'],
     ['/recordatorio <min> <texto>', 'Aviso al grupo'],
-    ['/ranking', 'Top de más activos'],
+    ['/ranking', 'Top de más activas'],
     ['/movimiento', 'Últimos movimientos de admins 🗂️']
   ]},
   { cat: '👥 Clan', items: [
