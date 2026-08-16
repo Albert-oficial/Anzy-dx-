@@ -88,15 +88,20 @@ function prepararCookiesYoutube() {
 const HAY_COOKIES_YOUTUBE = prepararCookiesYoutube();
 const ARGS_COOKIES = HAY_COOKIES_YOUTUBE ? `--cookies "${RUTA_COOKIES_YOUTUBE}"` : '';
 
-// ── SISTEMA DE AUTOACTUALIZACIÓN (se ejecuta sola al reiniciar el bot) ─
+// ── SISTEMA DE AUTOACTUALIZACIÓN (canal NIGHTLY) ────────────────────────
+// YouTube cambia su formato interno seguido, lo que causa el error
+// "Failed to extract any player response". El release "estable" de
+// yt-dlp tarda más en corregirlo; el canal "nightly" se actualiza casi
+// a diario específicamente para este tipo de rupturas — por eso lo
+// usamos aquí en vez del estable.
 async function actualizarSistema() {
-  console.log('🔄 Buscando actualizaciones de yt-dlp...');
+  console.log('🔄 Buscando actualizaciones de yt-dlp (canal nightly)...');
   return new Promise((resolve) => {
-    exec(`"${RUTA_YTDLP}" -U`, (err) => {
-      if (!err) { console.log('✅ yt-dlp está en su versión más reciente (auto-actualizado)'); return resolve(); }
-      exec('pip install --upgrade yt-dlp', (err2) => {
+    exec(`"${RUTA_YTDLP}" --update-to nightly`, (err) => {
+      if (!err) { console.log('✅ yt-dlp actualizado al último nightly (auto-actualizado)'); return resolve(); }
+      exec('pip install --upgrade --pre yt-dlp', (err2) => {
         if (err2) console.log('⚠️ No se pudo actualizar yt-dlp automáticamente (revisa que exista bin/yt-dlp o Python):', err2.message);
-        else console.log('✅ yt-dlp actualizado vía pip');
+        else console.log('✅ yt-dlp actualizado vía pip (pre-release)');
         resolve();
       });
     });
