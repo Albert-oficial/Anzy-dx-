@@ -11,8 +11,8 @@ const { exec } = require('child_process');
 const pino = require('pino');
 
 // ── UBICACIÓN DE yt-dlp / ffmpeg ──────────────────────────────
-// Build command correcto en Render:
-// npm install && mkdir -p bin && curl -fL https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/latest/download/yt-dlp_linux -o bin/yt-dlp && chmod +x bin/yt-dlp && bin/yt-dlp --version
+// Build command en Render (fuerza descarga fresca sin caché vieja):
+// npm install && rm -rf bin && mkdir -p bin && curl -fL "https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/latest/download/yt-dlp_linux?nocache=$(date +%s)" -o bin/yt-dlp && chmod +x bin/yt-dlp && bin/yt-dlp --version
 const CARPETA_BIN = path.join(__dirname, 'bin');
 const RUTA_YTDLP = fs.existsSync(path.join(CARPETA_BIN, 'yt-dlp'))
   ? path.join(CARPETA_BIN, 'yt-dlp')
@@ -20,12 +20,21 @@ const RUTA_YTDLP = fs.existsSync(path.join(CARPETA_BIN, 'yt-dlp'))
 const HAY_FFMPEG_LOCAL = fs.existsSync(path.join(CARPETA_BIN, 'ffmpeg'));
 const ARGS_FFMPEG = HAY_FFMPEG_LOCAL ? `--ffmpeg-location "${CARPETA_BIN}"` : '';
 
+// ── PROXY OPCIONAL ────────────────────────────────────────────────────
+// Si en algún momento consigues un proxy (residencial, VPS propio, túnel
+// desde tu casa, etc.), solo pon la URL en la variable de entorno
+// PROXY_YOUTUBE en Render (ej: http://usuario:clave@host:puerto) y se
+// activa sola en todas las descargas de YouTube, sin tocar código.
+const PROXY_YOUTUBE = process.env.PROXY_YOUTUBE || '';
+const ARGS_PROXY = PROXY_YOUTUBE ? `--proxy "${PROXY_YOUTUBE}"` : '';
+if (PROXY_YOUTUBE) console.log('🌐 Proxy configurado para descargas de YouTube.');
+
 // ── VERIFICACIÓN DE QUE EL BINARIO REALMENTE FUNCIONA ───────────────────
 function verificarBinarioYtDlp() {
   return new Promise((resolve) => {
     exec(`"${RUTA_YTDLP}" --version`, { timeout: 15000 }, (err, stdout) => {
       if (err) {
-        console.log('❌ ALERTA: el binario de yt-dlp no funciona o está corrupto. Revisa el build command en Render. Detalle:', err.message);
+        console.log('❌ ALERTA: el binario de yt-dlp no funciona o está corrupto. Detalle:', err.message);
         return resolve(false);
       }
       console.log(`✅ yt-dlp funcionando correctamente, versión: ${String(stdout).trim()}`);
@@ -82,7 +91,7 @@ async function actualizarSistema() {
       if (!err) { console.log('✅ yt-dlp actualizado al último nightly (auto-actualizado)'); return resolve(); }
       exec('pip install --upgrade --pre --break-system-packages yt-dlp', (err2) => {
         if (err2) console.log('⚠️ No se pudo actualizar yt-dlp automáticamente:', err2.message);
-        else console.log('✅ yt-dlp actualizado vía pip (pre-release)');
+        else console.log('✅ yt-dlp actualizado vía pip (pre-release) — nota: esta copia NO es la que usa el bot, solo bin/yt-dlp se usa realmente.');
         resolve();
       });
     });
@@ -110,7 +119,7 @@ function ejecutarComando(cmd, opciones) {
   return new Promise((resolve, reject) => {
     exec(cmd, opciones, (err, stdout, stderr) => {
       if (err) {
-        const detalle = (stderr || err.message || '').trim().split('\n').slice(-6).join('\n');
+        const detalle = (stderr || err.message || '').trim().split('\n').slice(-8).join('\n');
         return reject(new Error(detalle || err.message));
       }
       resolve(stdout);
@@ -123,20 +132,20 @@ const ENLACE_YOUTUBE = /(?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/watch\?v=|you
 const MAX_INTENTOS_DESCARGA = 4;
 const DURACION_MAXIMA_SEGUNDOS = 15 * 60;
 
-// ── ROTACIÓN DE "PLAYER CLIENTS" ANTI-BLOQUEO ───────────────────────────
-const CLIENTES_CON_COOKIES = ['web', 'web_safari', 'mweb', 'tv_embedded'];
-const CLIENTES_SIN_COOKIES = ['ios', 'android', 'android,web', 'tv_embedded,web'];
-const CLIENTES_YOUTUBE_POR_INTENTO = HAY_COOKIES_YOUTUBE ? CLIENTES_CON_COOKIES : CLIENTES_SIN_COOKIES;
-
-function argsAntibloqueoPorIntento(intento) {
-  const cliente = CLIENTES_YOUTUBE_POR_INTENTO[(intento - 1) % CLIENTES_YOUTUBE_POR_INTENTO.length];
-  return `--extractor-args "youtube:player_client=${cliente};formats=missing_pot"`;
+// ── SIN FORZAR CLIENTE ESPECÍFICO ───────────────────────────────────────
+// Antes forzábamos manualmente ios/android/web en cada intento. Eso le
+// quitaba a yt-dlp su propia lógica interna de fallback entre clientes,
+// que es más completa que una lista fija nuestra. Ahora dejamos que
+// yt-dlp decida automáticamente (comportamiento por defecto), solo con
+// cookies + proxy si existen. Cada intento simplemente reintenta.
+function argsExtraccion() {
+  return [ARGS_COOKIES, ARGS_PROXY].filter(Boolean).join(' ');
 }
 
 async function obtenerDuracionYoutube(url) {
   const cmd = [
     `"${RUTA_YTDLP}"`, '--no-warnings',
-    argsAntibloqueoPorIntento(1), ARGS_COOKIES,
+    argsExtraccion(),
     '--print', 'duration', `"${url}"`
   ].filter(Boolean).join(' ');
   const stdout = await ejecutarComando(cmd, { timeout: 30000 });
@@ -145,32 +154,25 @@ async function obtenerDuracionYoutube(url) {
   return segundos;
 }
 
+// ── DESCARGAR AUDIO CON REINTENTOS Y DIAGNÓSTICO ─────────────────────────
 async function descargarAudioYoutube(url) {
   const id = url.match(ENLACE_YOUTUBE)[1];
   let ultimoError = null;
 
   for (let intento = 1; intento <= MAX_INTENTOS_DESCARGA; intento++) {
-    // Ya no forzamos la extensión final aquí — yt-dlp + ffmpeg deciden
-    // el nombre real del archivo tras la extracción/conversión.
     const archivoBase = path.join(__dirname, `temp_audio_${id}_${intento}`);
     const archivoFinal = `${archivoBase}.m4a`;
-    const clienteUsado = CLIENTES_YOUTUBE_POR_INTENTO[(intento - 1) % CLIENTES_YOUTUBE_POR_INTENTO.length];
 
     try {
-      console.log(`🔄 [YouTube audio] Intento ${intento}/${MAX_INTENTOS_DESCARGA} (cliente: ${clienteUsado}, cookies: ${HAY_COOKIES_YOUTUBE ? 'sí' : 'no'})...`);
+      console.log(`🔄 [YouTube audio] Intento ${intento}/${MAX_INTENTOS_DESCARGA} (cookies: ${HAY_COOKIES_YOUTUBE ? 'sí' : 'no'}, proxy: ${PROXY_YOUTUBE ? 'sí' : 'no'})...`);
 
-      // 🔧 Cambio clave: pedimos "bestaudio/best" (sin exigir m4a exacto)
-      // y usamos --extract-audio + --audio-format m4a para que ffmpeg
-      // convierta lo que sea que YouTube ofrezca. Esto evita el error
-      // "Requested format is not available" cuando el formato exacto
-      // m4a no está en la lista para ese cliente/video en particular.
       const cmd = [
         `"${RUTA_YTDLP}"`,
         '-f', 'bestaudio/best',
         '--extract-audio', '--audio-format', 'm4a', '--audio-quality', '0',
         '--no-playlist', '--retries', '5', '--socket-timeout', '30',
         '--no-check-certificates',
-        argsAntibloqueoPorIntento(intento), ARGS_COOKIES, ARGS_FFMPEG,
+        argsExtraccion(), ARGS_FFMPEG,
         '-o', `"${archivoBase}.%(ext)s"`, `"${url}"`
       ].filter(Boolean).join(' ');
 
@@ -187,34 +189,29 @@ async function descargarAudioYoutube(url) {
 
     } catch (err) {
       ultimoError = err;
-      console.log(`❌ [YouTube audio] Intento ${intento} falló (cliente ${clienteUsado}):\n${err.message}`);
+      console.log(`❌ [YouTube audio] Intento ${intento} falló:\n${err.message}`);
       if (fs.existsSync(archivoFinal)) fs.unlinkSync(archivoFinal);
       if (intento < MAX_INTENTOS_DESCARGA) await new Promise(r => setTimeout(r, 4000));
     }
   }
-  throw new Error(`Falló después de ${MAX_INTENTOS_DESCARGA} intentos. Último error: ${ultimoError?.message?.slice(0, 300) || 'desconocido'}`);
+  throw new Error(`Falló después de ${MAX_INTENTOS_DESCARGA} intentos. Último error: ${ultimoError?.message?.slice(0, 400) || 'desconocido'}`);
 }
-
 async function descargarVideoYoutube(url) {
   const id = url.match(ENLACE_YOUTUBE)[1];
   let ultimoError = null;
 
   for (let intento = 1; intento <= MAX_INTENTOS_DESCARGA; intento++) {
     const archivo = path.join(__dirname, `temp_video_${id}_${intento}.mp4`);
-    const clienteUsado = CLIENTES_YOUTUBE_POR_INTENTO[(intento - 1) % CLIENTES_YOUTUBE_POR_INTENTO.length];
 
     try {
-      console.log(`🔄 [YouTube video] Intento ${intento}/${MAX_INTENTOS_DESCARGA} (cliente: ${clienteUsado}, cookies: ${HAY_COOKIES_YOUTUBE ? 'sí' : 'no'})...`);
+      console.log(`🔄 [YouTube video] Intento ${intento}/${MAX_INTENTOS_DESCARGA} (cookies: ${HAY_COOKIES_YOUTUBE ? 'sí' : 'no'}, proxy: ${PROXY_YOUTUBE ? 'sí' : 'no'})...`);
 
-      // 🔧 Formato más flexible: "best" simple como última opción de la
-      // cadena, para no quedarnos sin nada si los formatos combinados
-      // (video+audio separados) no están disponibles para ese cliente.
       const cmd = [
         `"${RUTA_YTDLP}"`,
         '-f', 'bv*[height<=720]+ba/b[height<=720]/best',
         '--no-playlist', '--retries', '5', '--socket-timeout', '30',
         '--no-check-certificates', '--merge-output-format', 'mp4',
-        argsAntibloqueoPorIntento(intento), ARGS_COOKIES, ARGS_FFMPEG,
+        argsExtraccion(), ARGS_FFMPEG,
         '-o', `"${archivo}"`, `"${url}"`
       ].filter(Boolean).join(' ');
 
@@ -231,12 +228,12 @@ async function descargarVideoYoutube(url) {
 
     } catch (err) {
       ultimoError = err;
-      console.log(`❌ [YouTube video] Intento ${intento} falló (cliente ${clienteUsado}):\n${err.message}`);
+      console.log(`❌ [YouTube video] Intento ${intento} falló:\n${err.message}`);
       if (fs.existsSync(archivo)) fs.unlinkSync(archivo);
       if (intento < MAX_INTENTOS_DESCARGA) await new Promise(r => setTimeout(r, 4000));
     }
   }
-  throw new Error(`Falló después de ${MAX_INTENTOS_DESCARGA} intentos. Último error: ${ultimoError?.message?.slice(0, 300) || 'desconocido'}`);
+  throw new Error(`Falló después de ${MAX_INTENTOS_DESCARGA} intentos. Último error: ${ultimoError?.message?.slice(0, 400) || 'desconocido'}`);
 }
 
 // ── DETECTA ENLACES DE TIKTOK Y DESCARGA SIN MARCA DE AGUA ──────
@@ -1226,6 +1223,28 @@ La escuadra rival será declarada vencedora automáticamente y avanzará a la si
 async function procesarComandoJefe(sock, remitente, texto) {
   const t = texto.toLowerCase().trim();
 
+  // ── DIAGNÓSTICO: formatos reales disponibles de un video (solo dueño) ──
+  if (t.startsWith('/ytformatos ') || t.startsWith('ytformatos ')) {
+    const enlaceDiag = texto.replace(/^\/?ytformatos\s*/i, '').trim();
+    if (!ENLACE_YOUTUBE.test(enlaceDiag)) {
+      await sock.sendMessage(remitente, { text: 'Uso: /ytformatos <enlace-de-youtube>' });
+      return;
+    }
+    await sock.sendMessage(remitente, { text: '🔬 Consultando formatos reales disponibles...' });
+    try {
+      const cmdDiag = [
+        `"${RUTA_YTDLP}"`, '--no-warnings', '--list-formats',
+        argsExtraccion(), `"${enlaceDiag}"`
+      ].filter(Boolean).join(' ');
+      const resultado = await ejecutarComando(cmdDiag, { timeout: 30000 });
+      const salida = String(resultado).slice(0, 3500);
+      await sock.sendMessage(remitente, { text: `📋 Formatos disponibles:\n\`\`\`${salida}\`\`\`` });
+    } catch (err) {
+      await sock.sendMessage(remitente, { text: `❌ Error al listar formatos:\n\`\`\`${err.message.slice(0, 1800)}\`\`\`` });
+    }
+    return;
+  }
+
   if (t === 'salir' || t.includes('salir del menu') || t.includes('salir del menú') || t.includes('modo normal')) {
     modoJefe.delete(remitente);
     await sock.sendMessage(remitente, { text: 'Listo jefe, cerré el menú 🙌' });
@@ -1267,6 +1286,28 @@ async function procesarMensajeGrupo(sock, msg, identificadoresBot) {
 
   registrarMensajeGrupo(jidGrupo, jidUsuario);
   const textoLower = texto.toLowerCase();
+
+  // ── DIAGNÓSTICO: formatos reales disponibles (solo dueño, también en grupo) ──
+  if (textoLower.startsWith('/ytformatos ') && jidUsuario === JID_DUEÑO) {
+    const enlaceDiag = texto.replace(/^\/ytformatos\s*/i, '').trim();
+    if (!ENLACE_YOUTUBE.test(enlaceDiag)) {
+      await sock.sendMessage(jidGrupo, { text: 'Uso: /ytformatos <enlace-de-youtube>' });
+      return;
+    }
+    await sock.sendMessage(jidGrupo, { text: '🔬 Consultando formatos reales disponibles...' });
+    try {
+      const cmdDiag = [
+        `"${RUTA_YTDLP}"`, '--no-warnings', '--list-formats',
+        argsExtraccion(), `"${enlaceDiag}"`
+      ].filter(Boolean).join(' ');
+      const resultado = await ejecutarComando(cmdDiag, { timeout: 30000 });
+      const salida = String(resultado).slice(0, 3500);
+      await sock.sendMessage(jidGrupo, { text: `📋 Formatos disponibles:\n\`\`\`${salida}\`\`\`` });
+    } catch (err) {
+      await sock.sendMessage(jidGrupo, { text: `❌ Error al listar formatos:\n\`\`\`${err.message.slice(0, 1800)}\`\`\`` });
+    }
+    return;
+  }
 
   const esComandoYoutubeVideo = /^\/youtubevideo(\s|$)/i.test(texto);
   if (esComandoYoutubeVideo) {
@@ -1442,27 +1483,6 @@ async function procesarMensajeGrupo(sock, msg, identificadoresBot) {
   const resto = partesTexto.slice(1);
 
   try {
-// ── DIAGNÓSTICO: solo el dueño puede pedir la lista real de formatos ──
-  if (textoLower.startsWith('/ytformatos ') && jidUsuario === JID_DUEÑO) {
-    const enlaceDiag = texto.replace(/^\/ytformatos\s*/i, '').trim();
-    if (!ENLACE_YOUTUBE.test(enlaceDiag)) {
-      await sock.sendMessage(jidGrupo, { text: 'Uso: /ytformatos <enlace-de-youtube>' });
-      return;
-    }
-    await sock.sendMessage(jidGrupo, { text: '🔬 Consultando formatos reales disponibles...' });
-    try {
-      const cmdDiag = [
-        `"${RUTA_YTDLP}"`, '--no-warnings', '--list-formats',
-        argsAntibloqueoPorIntento(1), ARGS_COOKIES, `"${enlaceDiag}"`
-      ].filter(Boolean).join(' ');
-      const resultado = await ejecutarComando(cmdDiag, { timeout: 30000 });
-      const salida = String(resultado).slice(0, 3500);
-      await sock.sendMessage(jidGrupo, { text: `📋 Formatos disponibles:\n\`\`\`${salida}\`\`\`` });
-    } catch (err) {
-      await sock.sendMessage(jidGrupo, { text: `❌ Error al listar formatos:\n\`\`\`${err.message.slice(0, 1500)}\`\`\`` });
-    }
-    return;
-  }
     switch (comando) {
       case '/matrimonio': {
         const { texto: t, mentions } = comandoMatrimonio(mencionados);
