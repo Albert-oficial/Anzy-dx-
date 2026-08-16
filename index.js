@@ -265,7 +265,6 @@ if (!CLAVE_IA_PRINCIPAL) {
 if (!CLAVE_IA_RESPALDO) {
   console.log('⚠️ Aviso: no se detectó CLAVE_IA_RESPALDO (segundo token).');
 }
-}
 if (!CLAVE_IA_RESPALDO2) {
   console.log('⚠️ Aviso: no se detectó CLAVE_IA_RESPALDO2 (tercer token).');
 }
