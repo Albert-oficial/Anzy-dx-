@@ -1,36 +1,33 @@
 require('dotenv').config();
+
 const {
   default: makeWASocket,
   useMultiFileAuthState,
   DisconnectReason,
   fetchLatestBaileysVersion
 } = require('@whiskeysockets/baileys');
-const { GoogleGenAI } = require('@google/genai');
-const pino = require('pino');
+
 const fs = require('fs');
 const path = require('path');
 const { exec } = require('child_process');
 
 // ═══════════════════════════════════════════════
-// ⚙️ CONFIGURACIÓN — TODO DESDE VARIABLES DE RENDER
+// ⚙️ CONFIGURACIÓN
 // ═══════════════════════════════════════════════
-const CLAVE_IA = process.env.CLAVE_IA_PRINCIPAL;
-const JID_DUEÑO = process.env.NUMERO_DUEÑO ? `${process.env.NUMERO_DUEÑO}@s.whatsapp.net` : '';
-
-// ── RUTA DE yt-dlp (se instala automáticamente en Render) ──
+const CLAVE_IA = process.env.CLAVE_IA_PRINCIPAL || '';
 const CARPETA_BIN = path.join(__dirname, 'bin');
 const RUTA_YTDLP = fs.existsSync(path.join(CARPETA_BIN, 'yt-dlp'))
   ? path.join(CARPETA_BIN, 'yt-dlp')
   : 'yt-dlp';
 
-// ── PROCESAR COOKIES DESDE VARIABLE DE ENTORNO ──
+// ── PROCESAR COOKIES ──
 const ARCHIVO_COOKIES = path.join(__dirname, 'cookies_youtube.txt');
 let ARGS_COOKIES = '';
 
 function prepararCookies() {
   const contenido = process.env.YOUTUBE_COOKIES;
   if (!contenido) {
-    console.log('⚠️ No hay cookies configuradas en Render (YOUTUBE_COOKIES)');
+    console.log('⚠️ Sin cookies (YOUTUBE_COOKIES no definida)');
     return false;
   }
   try {
@@ -46,30 +43,29 @@ function prepararCookies() {
     }
     fs.writeFileSync(ARCHIVO_COOKIES, normalizadas.join('\n') + '\n');
     ARGS_COOKIES = `--cookies "${ARCHIVO_COOKIES}"`;
-    console.log('✅ Cookies cargadas y activas 🍪');
+    console.log('✅ Cookies cargadas 🍪');
     return true;
   } catch (err) {
-    console.log('❌ Error al procesar cookies:', err.message);
+    console.log('❌ Error en cookies:', err.message);
     return false;
   }
 }
 prepararCookies();
 
 // ═══════════════════════════════════════════════
-// 🎵 DETECCIÓN DE ENLACES DE YOUTUBE
+// 🎵 DETECCIÓN DE ENLACES
 // ═══════════════════════════════════════════════
 const ENLACE_YOUTUBE = /(?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/shorts\/)([a-zA-Z0-9_-]{11})/;
 
 // ═══════════════════════════════════════════════
-// 🎵 FUNCIÓN DE DESCARGAR AUDIO
+// 🎵 DESCARGAR AUDIO
 // ═══════════════════════════════════════════════
 async function descargarAudioYoutube(url) {
   const id = url.match(ENLACE_YOUTUBE)?.[1];
-  if (!id) throw new Error('Enlace de YouTube inválido');
+  if (!id) throw new Error('Enlace inválido');
 
   const archivo = path.join(__dirname, `temp_audio_${id}-${Date.now()}.mp3`);
 
-  // ✅ SE HACE PASAR POR CELULAR ANDROID + COOKIES + EVITA BLOQUEOS
   const cmd = [
     `"${RUTA_YTDLP}"`,
     '--format', 'bestaudio[ext=m4a]/bestaudio/best',
@@ -81,7 +77,6 @@ async function descargarAudioYoutube(url) {
     '--no-check-certificates',
     '--no-playlist',
     '--retries', '3',
-    '--socket-timeout', '30',
     ARGS_COOKIES,
     '-o', `"${archivo}"`,
     `"${url}"`
@@ -97,52 +92,58 @@ async function descargarAudioYoutube(url) {
   });
 
   if (!fs.existsSync(archivo) || fs.statSync(archivo).size < 5000) {
-    throw new Error('El archivo no se generó correctamente');
+    throw new Error('Archivo no generado');
   }
-
   return archivo;
 }
 
 // ═══════════════════════════════════════════════
-// 🤖 INICIAR BOT
+// 🤖 INICIAR BOT — QR GARANTIZADO ✅
 // ═══════════════════════════════════════════════
 async function iniciarBot() {
+  console.log('🔄 Cargando sesión de WhatsApp...');
+
   const { state, saveCreds } = await useMultiFileAuthState('sesion');
   const { version } = await fetchLatestBaileysVersion();
+
+  console.log(`✅ Versión de Baileys obtenida: ${version.join('.')}`);
 
   const sock = makeWASocket({
     auth: state,
     version,
-    printQRInTerminal: true,
-    browser: ['ANZY DEX Bot', 'Chrome', '14.0'],
-    logger: pino({ level: 'silent' })
+    printQRInTerminal: true,  // ✅ QR OBLIGATORIO EN CONSOLA
+    browser: ['ANZY DEX', 'Chrome', '14.0']
   });
 
-  // ── CONEXIÓN Y RECONEXIÓN AUTOMÁTICA ──
+  // ── ESTADO DE CONEXIÓN ──
   sock.ev.on('connection.update', (update) => {
-    const { connection, qr } = update;
+    const { connection, qr, lastDisconnect } = update;
+
     if (qr) {
-      console.log('\n📋 ═══════════════════════════════════════');
-      console.log('   ESCANEA ESTE QR PARA CONECTAR EL BOT');
-      console.log('═══════════════════════════════════════\n');
+      console.log('\n══════════════════════════════════════════');
+      console.log('📋 ── ESCANEA ESTE QR CON WHATSAPP ──');
+      console.log('══════════════════════════════════════════\n');
     }
+
     if (connection === 'open') {
-      console.log('\n✅ 🤖 ANZY DEX — BOT CONECTADO Y LISTO 🎉');
-      console.log('🎵 Comando: /youtube [enlace de YouTube]\n');
+      console.log('\n✅ 🤖 ANZY DEX — CONECTADO Y LISTO 🎉');
+      console.log('🎵 Comando: /youtube [enlace]\n');
     }
+
     if (connection === 'close') {
-      const codigo = update.lastDisconnect?.error?.code || 'Desconocido';
-      console.log(`🔌 Desconectado (${codigo}) — Reintentando en 5s...`);
+      const codigo = lastDisconnect?.error?.code || 'Desconocido';
+      const razon = DisconnectReason[codigo] || 'Sin detalle';
+      console.log(`🔌 Desconectado: ${razon} — Reintentando en 5s...`);
       setTimeout(iniciarBot, 5000);
     }
   });
 
   sock.ev.on('creds.update', saveCreds);
 
-  // ── RECIBIR Y PROCESAR MENSAJES ──
+  // ── RECIBIR MENSAJES ──
   sock.ev.on('messages.upsert', async (msg) => {
     const mensaje = msg.messages[0];
-    if (!mensaje.message || mensaje.key.fromMe || mensaje.key.remoteJid?.includes('@s.whatsapp.net') === false) return;
+    if (!mensaje.message || mensaje.key.fromMe) return;
 
     const jid = mensaje.key.remoteJid;
     const texto = (mensaje.message.conversation || mensaje.message.extendedTextMessage?.text || '').trim();
@@ -153,38 +154,33 @@ async function iniciarBot() {
 
       if (!ENLACE_YOUTUBE.test(enlace)) {
         await sock.sendMessage(jid, {
-          text: '⚠️ Formato correcto:\n/youtube https://youtu.be/xxxxxx'
+          text: '⚠️ Formato:\n/youtube https://youtu.be/xxxxxx'
         });
         return;
       }
 
-      const aviso = await sock.sendMessage(jid, {
-        text: '🎵 Preparando audio... espera un momento ⏳'
-      });
+      await sock.sendMessage(jid, { text: '🎵 Preparando audio... espera un momento ⏳' });
 
       try {
         const archivo = await descargarAudioYoutube(enlace);
         await sock.sendMessage(jid, {
           audio: { url: archivo },
-          mimetype: 'audio/mpeg',
-          fileName: 'audio.mp3'
+          mimetype: 'audio/mpeg'
         });
-        console.log('✅ Audio enviado correctamente 🎵');
-        fs.unlink(archivo, () => {}); // ✅ Borra después de enviar
-
+        console.log('✅ Audio enviado 🎵');
+        fs.unlink(archivo, () => {});
       } catch (err) {
         await sock.sendMessage(jid, {
-          text: `❌ No se pudo descargar.\n\nMotivo: ${err.message.slice(0, 400)}\n\nIntenta más tarde o con otro enlace 🙏`
+          text: `❌ No se pudo descargar.\n\nMotivo: ${err.message.slice(0, 300)}\n\nIntenta más tarde 🙏`
         });
       }
     }
   });
 }
 
-// ═══════════════════════════════════════════════
-// 🚀 ARRANCAR EL BOT
-// ═══════════════════════════════════════════════
+// 🚀 ARRANCAR OBLIGATORIAMENTE
 iniciarBot().catch(err => {
-  console.error('❌ Error al iniciar el bot:', err.message);
+  console.error('❌ ERROR AL INICIAR:', err.message);
+  console.error(err.stack);
   process.exit(1);
 });
