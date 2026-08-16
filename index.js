@@ -1263,6 +1263,9 @@ async function procesarMensajeGrupo(sock, msg, identificadoresBot) {
     try {
       duracion = await obtenerDuracionYoutube(enlace);
     } catch (err) {
+      // 🔧 ANTES este error se perdía en silencio y por eso nunca aparecía
+      // nada en los logs. Ahora queda registrado con detalle completo.
+      console.log(`❌ [YouTube video] Falló la verificación de duración:\n${err.message}`);
       await sock.sendMessage(jidGrupo, { text: '💔 No pude revisar ese video, intenta con otro enlace 🙏' });
       return;
     }
@@ -1291,7 +1294,7 @@ async function procesarMensajeGrupo(sock, msg, identificadoresBot) {
     return;
   }
 
-  // ✅ DESCARGAR AUDIO DE YOUTUBE CON /youtube (máx. 15 min, ahora con verificación previa)
+  // ✅ DESCARGAR AUDIO DE YOUTUBE CON /youtube (máx. 15 min)
   const esComandoYoutube = /^\/youtube(\s|$)/i.test(texto);
   if (esComandoYoutube) {
     const enlace = texto.replace(/^\/youtube\s*/i, '').trim();
@@ -1309,6 +1312,8 @@ async function procesarMensajeGrupo(sock, msg, identificadoresBot) {
     try {
       duracionAudio = await obtenerDuracionYoutube(enlace);
     } catch (err) {
+      // 🔧 Mismo arreglo aquí: antes se perdía el error, ahora queda en logs.
+      console.log(`❌ [YouTube audio] Falló la verificación de duración:\n${err.message}`);
       await sock.sendMessage(jidGrupo, { text: '💔 No pude revisar ese video, intenta con otro enlace 🙏' });
       return;
     }
@@ -1875,3 +1880,4 @@ if (URL_PROPIA) {
 }
 
 iniciarBot();
+
