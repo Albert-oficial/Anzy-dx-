@@ -150,7 +150,7 @@ async function descargarAudioYoutube(url) {
   let ultimoError = null;
 
   for (let intento = 1; intento <= MAX_INTENTOS_DESCARGA; intento++) {
-    const archivo = path.join(__dirname, `temp_audio_${id}_${intento}.mp3`);
+    const archivo = path.join(__dirname, `temp_audio_${id}_${intento}.m4a`);
     const clienteUsado = CLIENTES_YOUTUBE_POR_INTENTO[(intento - 1) % CLIENTES_YOUTUBE_POR_INTENTO.length];
 
     try {
@@ -158,11 +158,7 @@ async function descargarAudioYoutube(url) {
 
       const cmd = [
         `"${RUTA_YTDLP}"`,
-        '-f', 'bestaudio/best',
-'--extract-audio',
-'--audio-format', 'mp3',
-'--audio-quality', '0',
-
+        '-f', 'bestaudio[ext=m4a]/bestaudio',
         '--no-playlist', '--retries', '5', '--socket-timeout', '30',
         '--no-check-certificates',
         argsAntibloqueoPorIntento(intento), ARGS_COOKIES,
@@ -314,7 +310,7 @@ const TU_NUMERO = '51996399291';
 const JID_DUEÑO = `${TU_NUMERO}@s.whatsapp.net`;
 const PUERTO = process.env.PORT || 3000;
 const LIMITE_DIARIO_ESTIMADO = 1400;
-const MAX_TOKENS_RESPUESTA = 1500;
+const MAX_TOKENS_RESPUESTA = 500;
 
 const COMANDO_LLAMADA_IA = '/anzy';
 
