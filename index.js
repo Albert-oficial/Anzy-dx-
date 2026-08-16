@@ -8,10 +8,13 @@ const os = require('os');
 const fs = require('fs');
 const path = require('path');
 const { exec } = require('child_process');
+const pino = require('pino');
 
 // ── UBICACIÓN DE yt-dlp / ffmpeg ──────────────────────────────
-// Build command correcto en Render (usa yt-dlp_linux, NO "yt-dlp" a secas):
-// npm install && mkdir -p bin && curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux -o bin/yt-dlp && chmod +x bin/yt-dlp
+// Build command correcto en Render (yt-dlp-nightly-builds es el repo
+// correcto — el nightly de yt-dlp/yt-dlp normal ya no existe, por eso
+// antes se descargaba una página de error 404 en vez del binario real):
+// npm install && mkdir -p bin && curl -fL https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/latest/download/yt-dlp_linux -o bin/yt-dlp && chmod +x bin/yt-dlp && bin/yt-dlp --version
 const CARPETA_BIN = path.join(__dirname, 'bin');
 const RUTA_YTDLP = fs.existsSync(path.join(CARPETA_BIN, 'yt-dlp'))
   ? path.join(CARPETA_BIN, 'yt-dlp')
@@ -19,28 +22,25 @@ const RUTA_YTDLP = fs.existsSync(path.join(CARPETA_BIN, 'yt-dlp'))
 const HAY_FFMPEG_LOCAL = fs.existsSync(path.join(CARPETA_BIN, 'ffmpeg'));
 const ARGS_FFMPEG = HAY_FFMPEG_LOCAL ? `--ffmpeg-location "${CARPETA_BIN}"` : '';
 
+// ── VERIFICACIÓN DE QUE EL BINARIO REALMENTE FUNCIONA ───────────────────
+// Antes, si el build descargaba un archivo corrupto (por ejemplo una
+// página de error en vez del binario), el bot arrancaba igual y recién
+// fallaba silenciosamente cuando alguien pedía un audio/video. Ahora se
+// verifica al arrancar y queda bien claro en los logs si algo está mal.
+function verificarBinarioYtDlp() {
+  return new Promise((resolve) => {
+    exec(`"${RUTA_YTDLP}" --version`, { timeout: 15000 }, (err, stdout) => {
+      if (err) {
+        console.log('❌ ALERTA: el binario de yt-dlp no funciona o está corrupto. Revisa el build command en Render — debe descargar desde yt-dlp-nightly-builds, no yt-dlp/yt-dlp. Detalle:', err.message);
+        return resolve(false);
+      }
+      console.log(`✅ yt-dlp funcionando correctamente, versión: ${String(stdout).trim()}`);
+      resolve(true);
+    });
+  });
+}
+
 // ── COOKIES DE YOUTUBE (con normalización automática de formato) ───────
-// El formato Netscape que yt-dlp necesita exige TABULACIONES reales entre
-// campos. Al copiar/pegar entre apps del celular, esos tabs casi siempre
-// se convierten en espacios normales, y yt-dlp descarta cada línea como
-// inválida (eso causaba el error "Sign in to confirm you're not a bot"
-// a pesar de ya tener las cookies puestas). Esta función reconstruye el
-// archivo con tabs reales sin importar cómo llegó el texto pegado, así
-// que ya no depende de que el copy-paste mantenga el formato exacto.
-//
-// CÓMO CONFIGURARLAS:
-// 1. Instala la extensión "Get cookies.txt LOCALLY" en Chrome/Firefox
-//    (mejor desde PC que desde celular, para evitar roturas de formato).
-// 2. Entra a youtube.com logueado con una cuenta de Google (idealmente
-//    una cuenta secundaria/desechable, no tu cuenta principal).
-// 3. Exporta las cookies de youtube.com con la extensión.
-// 4. Copia TODO el contenido del archivo .txt generado.
-// 5. En Render → tu servicio → Environment → agrega una variable:
-//    Key: YOUTUBE_COOKIES
-//    Value: pega ahí todo el contenido del archivo.
-// 6. Guarda — Render redeployará solo. Revisa los logs al arrancar:
-//    debe decir "🍪 Cookies de YouTube cargadas y normalizadas
-//    correctamente (N cookies)."
 const RUTA_COOKIES_YOUTUBE = path.join(__dirname, 'cookies_youtube.txt');
 function prepararCookiesYoutube() {
   const contenido = process.env.YOUTUBE_COOKIES;
@@ -48,7 +48,6 @@ function prepararCookiesYoutube() {
     console.log('⚠️ Aviso: no se configuró YOUTUBE_COOKIES. Las descargas de YouTube pueden fallar más seguido en Render por bloqueo anti-bot.');
     return false;
   }
-
   try {
     const lineas = contenido.split(/\r?\n/);
     const lineasNormalizadas = ['# Netscape HTTP Cookie File', ''];
@@ -57,23 +56,16 @@ function prepararCookiesYoutube() {
     for (const lineaCruda of lineas) {
       const linea = lineaCruda.trim();
       if (!linea || linea.startsWith('#')) continue;
-
-      // Divide por CUALQUIER espacio en blanco (uno o más), sin importar
-      // si en el original eran tabs o espacios.
       const campos = linea.split(/\s+/);
-      if (campos.length < 7) continue; // línea incompleta, se descarta
-
-      // Los primeros 6 campos son fijos; todo lo demás se une como el
-      // valor de la cookie (por si el valor tuviera algún espacio raro).
+      if (campos.length < 7) continue;
       const [dominio, subdominios, ruta, seguro, expiracion, nombre] = campos;
       const valor = campos.slice(6).join('');
-
       lineasNormalizadas.push([dominio, subdominios, ruta, seguro, expiracion, nombre, valor].join('\t'));
       cookiesValidas++;
     }
 
     if (cookiesValidas === 0) {
-      console.log('⚠️ YOUTUBE_COOKIES está configurada pero no se pudo leer ninguna cookie válida. Revisa que hayas copiado el archivo completo, línea por línea, sin recortar nada.');
+      console.log('⚠️ YOUTUBE_COOKIES está configurada pero no se pudo leer ninguna cookie válida.');
       return false;
     }
 
@@ -88,18 +80,15 @@ function prepararCookiesYoutube() {
 const HAY_COOKIES_YOUTUBE = prepararCookiesYoutube();
 const ARGS_COOKIES = HAY_COOKIES_YOUTUBE ? `--cookies "${RUTA_COOKIES_YOUTUBE}"` : '';
 
-// ── SISTEMA DE AUTOACTUALIZACIÓN (canal NIGHTLY) ────────────────────────
-// YouTube cambia su formato interno seguido, lo que causa el error
-// "Failed to extract any player response". El release "estable" de
-// yt-dlp tarda más en corregirlo; el canal "nightly" se actualiza casi
-// a diario específicamente para este tipo de rupturas — por eso lo
-// usamos aquí en vez del estable.
+// ── SISTEMA DE AUTOACTUALIZACIÓN (canal NIGHTLY, repo correcto) ────────
 async function actualizarSistema() {
   console.log('🔄 Buscando actualizaciones de yt-dlp (canal nightly)...');
   return new Promise((resolve) => {
     exec(`"${RUTA_YTDLP}" --update-to nightly`, (err) => {
       if (!err) { console.log('✅ yt-dlp actualizado al último nightly (auto-actualizado)'); return resolve(); }
-      exec('pip install --upgrade --pre yt-dlp', (err2) => {
+      // Fallback con pip: Render bloquea instalaciones globales (PEP 668),
+      // por eso se usa --break-system-packages, necesario en este entorno.
+      exec('pip install --upgrade --pre --break-system-packages yt-dlp', (err2) => {
         if (err2) console.log('⚠️ No se pudo actualizar yt-dlp automáticamente (revisa que exista bin/yt-dlp o Python):', err2.message);
         else console.log('✅ yt-dlp actualizado vía pip (pre-release)');
         resolve();
@@ -124,9 +113,7 @@ function limpiarArchivosTemporalesViejos() {
   }
 }
 
-// ── EJECUTOR CON DIAGNÓSTICO REAL (antes el error se cortaba a 80
-// caracteres y nunca sabías la causa real; ahora se ve el motivo exacto
-// en los logs de Render) ────────────────────────────────────────────────
+// ── EJECUTOR CON DIAGNÓSTICO REAL ────────────────────────────────────────
 function ejecutarComando(cmd, opciones) {
   return new Promise((resolve, reject) => {
     exec(cmd, opciones, (err, stdout, stderr) => {
@@ -143,12 +130,8 @@ function ejecutarComando(cmd, opciones) {
 // ── DETECTA ENLACES DE YOUTUBE ─────────────────────────────────
 const ENLACE_YOUTUBE = /(?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/shorts\/)([a-zA-Z0-9_-]{11})/;
 const MAX_INTENTOS_DESCARGA = 4;
-const DURACION_MAXIMA_SEGUNDOS = 15 * 60; // 15 minutos, aplica a audio Y video
+const DURACION_MAXIMA_SEGUNDOS = 15 * 60;
 
-// ── ROTACIÓN DE "PLAYER CLIENTS" ANTI-BLOQUEO ───────────────────────────
-// ios y android suelen ser los clientes más confiables desde IPs de
-// servidor. formats=missing_pot evita que yt-dlp descarte formatos solo
-// por no tener el token de origen.
 const CLIENTES_YOUTUBE_POR_INTENTO = ['ios', 'android', 'android,web', 'tv_embedded,web'];
 function argsAntibloqueoPorIntento(intento) {
   const cliente = CLIENTES_YOUTUBE_POR_INTENTO[(intento - 1) % CLIENTES_YOUTUBE_POR_INTENTO.length];
@@ -167,7 +150,6 @@ async function obtenerDuracionYoutube(url) {
   return segundos;
 }
 
-// ── DESCARGAR AUDIO CON REINTENTOS, COOKIES Y DIAGNÓSTICO ───────────────
 async function descargarAudioYoutube(url) {
   const id = url.match(ENLACE_YOUTUBE)[1];
   let ultimoError = null;
@@ -1608,7 +1590,9 @@ let nubeInicializada = false;
 
 async function iniciarBot() {
   limpiarArchivosTemporalesViejos();
+  await verificarBinarioYtDlp();
   await actualizarSistema();
+  // ...el resto de iniciarBot() queda exactamente igual
 
   if (!nubeInicializada) {
     await inicializarNubeIntegrantes();
@@ -1621,7 +1605,8 @@ async function iniciarBot() {
   const sock = makeWASocket({
     auth: state, version, printQRInTerminal: false,
     browser: [NOMBRE_BOT, 'Chrome', '2.0.0'], syncFullHistory: false, markOnlineOnConnect: true,
-    getMessage: async (key) => almacenMensajes.get(key.id) || undefined
+    getMessage: async (key) => almacenMensajes.get(key.id) || undefined,
+    logger: pino({ level: 'error' })
   });
 
   sockActivo = sock;
