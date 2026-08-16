@@ -1223,14 +1223,25 @@ La escuadra rival será declarada vencedora automáticamente y avanzará a la si
 async function procesarComandoJefe(sock, remitente, texto) {
   const t = texto.toLowerCase().trim();
 
-  // ── DIAGNÓSTICO: formatos reales disponibles de un video (solo dueño) ──
-  if (t.startsWith('/ytformatos ') || t.startsWith('ytformatos ')) {
-    const enlaceDiag = texto.replace(/^\/?ytformatos\s*/i, '').trim();
-    if (!ENLACE_YOUTUBE.test(enlaceDiag)) {
-      await sock.sendMessage(remitente, { text: 'Uso: /ytformatos <enlace-de-youtube>' });
+  // ── DIAGNÓSTICO: formatos reales disponibles (dueño o admin del grupo) ──
+  if (textoLower.startsWith('/ytformatos ')) {
+    // 🔧 Antes comparaba jidUsuario === JID_DUEÑO directo, pero WhatsApp
+    // identifica participantes de grupo con un ID alternativo (@lid) que
+    // no coincide con el número real — por eso el comando se caía en
+    // silencio sin dar ningún error. Ahora usa esAdminGrupo(), que ya
+    // maneja esa comparación de forma robusta (la misma que usa /kick).
+    const esAdminOJefe = await esAdminGrupo(sock, jidGrupo, jidUsuario);
+    if (!esAdminOJefe) {
+      await sock.sendMessage(jidGrupo, { text: 'Solo las admins pueden usar /ytformatos 🚫' });
       return;
     }
-    await sock.sendMessage(remitente, { text: '🔬 Consultando formatos reales disponibles...' });
+
+    const enlaceDiag = texto.replace(/^\/ytformatos\s*/i, '').trim();
+    if (!ENLACE_YOUTUBE.test(enlaceDiag)) {
+      await sock.sendMessage(jidGrupo, { text: 'Uso: /ytformatos <enlace-de-youtube>' });
+      return;
+    }
+    await sock.sendMessage(jidGrupo, { text: '🔬 Consultando formatos reales disponibles, dame unos segundos...' });
     try {
       const cmdDiag = [
         `"${RUTA_YTDLP}"`, '--no-warnings', '--list-formats',
@@ -1238,9 +1249,9 @@ async function procesarComandoJefe(sock, remitente, texto) {
       ].filter(Boolean).join(' ');
       const resultado = await ejecutarComando(cmdDiag, { timeout: 30000 });
       const salida = String(resultado).slice(0, 3500);
-      await sock.sendMessage(remitente, { text: `📋 Formatos disponibles:\n\`\`\`${salida}\`\`\`` });
+      await sock.sendMessage(jidGrupo, { text: `📋 Formatos disponibles:\n\`\`\`${salida || '(vacío — no se listó ningún formato)'}\`\`\`` });
     } catch (err) {
-      await sock.sendMessage(remitente, { text: `❌ Error al listar formatos:\n\`\`\`${err.message.slice(0, 1800)}\`\`\`` });
+      await sock.sendMessage(jidGrupo, { text: `❌ ESTO es lo que está fallando exactamente:\n\`\`\`${err.message.slice(0, 1800)}\`\`\`` });
     }
     return;
   }
