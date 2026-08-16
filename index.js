@@ -11,9 +11,7 @@ const { exec } = require('child_process');
 const pino = require('pino');
 
 // ── UBICACIÓN DE yt-dlp / ffmpeg ──────────────────────────────
-// Build command correcto en Render (yt-dlp-nightly-builds es el repo
-// correcto — el nightly de yt-dlp/yt-dlp normal ya no existe, por eso
-// antes se descargaba una página de error 404 en vez del binario real):
+// Build command correcto en Render:
 // npm install && mkdir -p bin && curl -fL https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/latest/download/yt-dlp_linux -o bin/yt-dlp && chmod +x bin/yt-dlp && bin/yt-dlp --version
 const CARPETA_BIN = path.join(__dirname, 'bin');
 const RUTA_YTDLP = fs.existsSync(path.join(CARPETA_BIN, 'yt-dlp'))
@@ -23,15 +21,11 @@ const HAY_FFMPEG_LOCAL = fs.existsSync(path.join(CARPETA_BIN, 'ffmpeg'));
 const ARGS_FFMPEG = HAY_FFMPEG_LOCAL ? `--ffmpeg-location "${CARPETA_BIN}"` : '';
 
 // ── VERIFICACIÓN DE QUE EL BINARIO REALMENTE FUNCIONA ───────────────────
-// Antes, si el build descargaba un archivo corrupto (por ejemplo una
-// página de error en vez del binario), el bot arrancaba igual y recién
-// fallaba silenciosamente cuando alguien pedía un audio/video. Ahora se
-// verifica al arrancar y queda bien claro en los logs si algo está mal.
 function verificarBinarioYtDlp() {
   return new Promise((resolve) => {
     exec(`"${RUTA_YTDLP}" --version`, { timeout: 15000 }, (err, stdout) => {
       if (err) {
-        console.log('❌ ALERTA: el binario de yt-dlp no funciona o está corrupto. Revisa el build command en Render — debe descargar desde yt-dlp-nightly-builds, no yt-dlp/yt-dlp. Detalle:', err.message);
+        console.log('❌ ALERTA: el binario de yt-dlp no funciona o está corrupto. Revisa el build command en Render. Detalle:', err.message);
         return resolve(false);
       }
       console.log(`✅ yt-dlp funcionando correctamente, versión: ${String(stdout).trim()}`);
@@ -45,7 +39,7 @@ const RUTA_COOKIES_YOUTUBE = path.join(__dirname, 'cookies_youtube.txt');
 function prepararCookiesYoutube() {
   const contenido = process.env.YOUTUBE_COOKIES;
   if (!contenido) {
-    console.log('⚠️ Aviso: no se configuró YOUTUBE_COOKIES. Las descargas de YouTube pueden fallar más seguido en Render por bloqueo anti-bot.');
+    console.log('⚠️ Aviso: no se configuró YOUTUBE_COOKIES.');
     return false;
   }
   try {
@@ -65,7 +59,7 @@ function prepararCookiesYoutube() {
     }
 
     if (cookiesValidas === 0) {
-      console.log('⚠️ YOUTUBE_COOKIES está configurada pero no se pudo leer ninguna cookie válida.');
+      console.log('⚠️ YOUTUBE_COOKIES no tiene ninguna cookie válida.');
       return false;
     }
 
@@ -86,10 +80,8 @@ async function actualizarSistema() {
   return new Promise((resolve) => {
     exec(`"${RUTA_YTDLP}" --update-to nightly`, (err) => {
       if (!err) { console.log('✅ yt-dlp actualizado al último nightly (auto-actualizado)'); return resolve(); }
-      // Fallback con pip: Render bloquea instalaciones globales (PEP 668),
-      // por eso se usa --break-system-packages, necesario en este entorno.
       exec('pip install --upgrade --pre --break-system-packages yt-dlp', (err2) => {
-        if (err2) console.log('⚠️ No se pudo actualizar yt-dlp automáticamente (revisa que exista bin/yt-dlp o Python):', err2.message);
+        if (err2) console.log('⚠️ No se pudo actualizar yt-dlp automáticamente:', err2.message);
         else console.log('✅ yt-dlp actualizado vía pip (pre-release)');
         resolve();
       });
@@ -119,8 +111,7 @@ function ejecutarComando(cmd, opciones) {
     exec(cmd, opciones, (err, stdout, stderr) => {
       if (err) {
         const detalle = (stderr || err.message || '').trim().split('\n').slice(-6).join('\n');
-        const errorDetallado = new Error(detalle || err.message);
-        return reject(errorDetallado);
+        return reject(new Error(detalle || err.message));
       }
       resolve(stdout);
     });
@@ -132,7 +123,11 @@ const ENLACE_YOUTUBE = /(?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/watch\?v=|you
 const MAX_INTENTOS_DESCARGA = 4;
 const DURACION_MAXIMA_SEGUNDOS = 15 * 60;
 
-const CLIENTES_YOUTUBE_POR_INTENTO = ['ios', 'android', 'android,web', 'tv_embedded,web'];
+// ── ROTACIÓN DE "PLAYER CLIENTS" ANTI-BLOQUEO ───────────────────────────
+const CLIENTES_CON_COOKIES = ['web', 'web_safari', 'mweb', 'tv_embedded'];
+const CLIENTES_SIN_COOKIES = ['ios', 'android', 'android,web', 'tv_embedded,web'];
+const CLIENTES_YOUTUBE_POR_INTENTO = HAY_COOKIES_YOUTUBE ? CLIENTES_CON_COOKIES : CLIENTES_SIN_COOKIES;
+
 function argsAntibloqueoPorIntento(intento) {
   const cliente = CLIENTES_YOUTUBE_POR_INTENTO[(intento - 1) % CLIENTES_YOUTUBE_POR_INTENTO.length];
   return `--extractor-args "youtube:player_client=${cliente};formats=missing_pot"`;
@@ -310,7 +305,7 @@ const MODELO_IMAGEN = process.env.MODELO_IMAGEN || 'gemini-3.1-flash-image';
 const CODIGO_DUEÑO = '2927760128';
 const NOMBRE_BOT = 'Anzy';
 const CREADOR = 'Albert Oficial';
-const VERSION_BOT = '2.03.0';
+const VERSION_BOT = '2.04.0';
 const TU_NUMERO = '51996399291';
 const JID_DUEÑO = `${TU_NUMERO}@s.whatsapp.net`;
 const PUERTO = process.env.PORT || 3000;
@@ -394,7 +389,6 @@ const SAFETY_SETTINGS = [
   { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_MEDIUM_AND_ABOVE' }
 ];
 
-// ── PERSONALIDAD DE LA IA (100% femenina, sin jerga tipo "causa") ──────
 const REGLAS_IA_BASE = `
 Eres ${NOMBRE_BOT}, una asistente virtual femenina, creada por ${CREADOR}. Hablas de ti misma en femenino, con un tono cálido, amable, cercano y dulce — pero SIEMPRE educado. Jamás eres grosera, cortante ni usas insultos, groserías o jerga como "causa", "pata", "brother" o similares.
 
@@ -619,7 +613,6 @@ function buscarConteoEnMapa(mapa, jid) {
   return 0;
 }
 
-// ── RESPALDO EN LA NUBE (JSONBin) ──────────────────────────────────────────
 const JSONBIN_API_KEY = process.env.JSONBIN_API_KEY || '';
 const JSONBIN_BASE = 'https://api.jsonbin.io/v3/b';
 let jsonbinBinIdIntegrantes = process.env.JSONBIN_BIN_ID_INTEGRANTES || null;
@@ -660,7 +653,7 @@ async function jsonbinGuardar(binId, data) {
 
 async function inicializarNubeIntegrantes() {
   if (!JSONBIN_API_KEY) {
-    console.log('⚠️ JSONBIN_API_KEY no configurada — los integrantes solo se guardan en el disco local (se pueden perder si Render reinicia el disco).');
+    console.log('⚠️ JSONBIN_API_KEY no configurada — los integrantes solo se guardan en el disco local.');
     return;
   }
   try {
@@ -673,7 +666,7 @@ async function inicializarNubeIntegrantes() {
       if (nuevoId) {
         jsonbinBinIdIntegrantes = nuevoId;
         console.log('🆕 Se creó un bin nuevo en JSONBin para los integrantes.');
-        console.log(`👉 IMPORTANTE: agrega esta variable de entorno en Render para no perder el enlace: JSONBIN_BIN_ID_INTEGRANTES=${nuevoId}`);
+        console.log(`👉 IMPORTANTE: agrega esta variable de entorno en Render: JSONBIN_BIN_ID_INTEGRANTES=${nuevoId}`);
       }
     }
   } catch (err) {
@@ -1262,7 +1255,6 @@ async function procesarMensajeGrupo(sock, msg, identificadoresBot) {
   registrarMensajeGrupo(jidGrupo, jidUsuario);
   const textoLower = texto.toLowerCase();
 
-  // ✅ DESCARGAR VIDEO DE YOUTUBE CON /youtubevideo (máx. 15 min)
   const esComandoYoutubeVideo = /^\/youtubevideo(\s|$)/i.test(texto);
   if (esComandoYoutubeVideo) {
     const enlace = texto.replace(/^\/youtubevideo\s*/i, '').trim();
@@ -1280,8 +1272,6 @@ async function procesarMensajeGrupo(sock, msg, identificadoresBot) {
     try {
       duracion = await obtenerDuracionYoutube(enlace);
     } catch (err) {
-      // 🔧 ANTES este error se perdía en silencio y por eso nunca aparecía
-      // nada en los logs. Ahora queda registrado con detalle completo.
       console.log(`❌ [YouTube video] Falló la verificación de duración:\n${err.message}`);
       await sock.sendMessage(jidGrupo, { text: '💔 No pude revisar ese video, intenta con otro enlace 🙏' });
       return;
@@ -1311,7 +1301,6 @@ async function procesarMensajeGrupo(sock, msg, identificadoresBot) {
     return;
   }
 
-  // ✅ DESCARGAR AUDIO DE YOUTUBE CON /youtube (máx. 15 min)
   const esComandoYoutube = /^\/youtube(\s|$)/i.test(texto);
   if (esComandoYoutube) {
     const enlace = texto.replace(/^\/youtube\s*/i, '').trim();
@@ -1329,7 +1318,6 @@ async function procesarMensajeGrupo(sock, msg, identificadoresBot) {
     try {
       duracionAudio = await obtenerDuracionYoutube(enlace);
     } catch (err) {
-      // 🔧 Mismo arreglo aquí: antes se perdía el error, ahora queda en logs.
       console.log(`❌ [YouTube audio] Falló la verificación de duración:\n${err.message}`);
       await sock.sendMessage(jidGrupo, { text: '💔 No pude revisar ese video, intenta con otro enlace 🙏' });
       return;
@@ -1365,7 +1353,6 @@ async function procesarMensajeGrupo(sock, msg, identificadoresBot) {
     return;
   }
 
-  // ✅ DESCARGAR VIDEO DE TIKTOK SIN MARCA DE AGUA CON /tiktok o /tik tok
   const esComandoTiktok = PATRON_COMANDO_TIKTOK.test(texto);
   if (esComandoTiktok) {
     const enlace = texto.replace(PATRON_COMANDO_TIKTOK, '').trim();
@@ -1592,7 +1579,6 @@ async function iniciarBot() {
   limpiarArchivosTemporalesViejos();
   await verificarBinarioYtDlp();
   await actualizarSistema();
-  // ...el resto de iniciarBot() queda exactamente igual
 
   if (!nubeInicializada) {
     await inicializarNubeIntegrantes();
@@ -1647,7 +1633,6 @@ async function iniciarBot() {
     if (!msg.message) return;
 
     const remitente = msg.key.remoteJid;
-
     if (msg.key.fromMe) return;
 
     almacenMensajes.set(msg.key.id, msg.message);
@@ -1778,59 +1763,31 @@ app.get('/', (req, res) => {
 <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Space+Mono&display=swap" rel="stylesheet">
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body {
-    background: radial-gradient(circle at 20% 0%, #10041f 0%, #000000 55%, #000000 100%);
-    color: #d7e6ff; font-family: 'Space Mono', monospace; min-height: 100vh;
-    display: flex; flex-direction: column; align-items: center; padding: 50px 20px 70px;
-    overflow-x: hidden;
-  }
-  h1 {
-    font-family: 'Orbitron', sans-serif; font-weight: 900; font-size: 42px; letter-spacing: 8px;
-    background: linear-gradient(90deg, #00f7ff, #a24bff, #ff2ee6, #00f7ff);
-    background-size: 300% auto; -webkit-background-clip: text; background-clip: text; color: transparent;
-    animation: brillo 6s linear infinite; text-align: center;
-  }
+  body { background: radial-gradient(circle at 20% 0%, #10041f 0%, #000000 55%, #000000 100%); color: #d7e6ff; font-family: 'Space Mono', monospace; min-height: 100vh; display: flex; flex-direction: column; align-items: center; padding: 50px 20px 70px; overflow-x: hidden; }
+  h1 { font-family: 'Orbitron', sans-serif; font-weight: 900; font-size: 42px; letter-spacing: 8px; background: linear-gradient(90deg, #00f7ff, #a24bff, #ff2ee6, #00f7ff); background-size: 300% auto; -webkit-background-clip: text; background-clip: text; color: transparent; animation: brillo 6s linear infinite; text-align: center; }
   @keyframes brillo { to { background-position: 300% center; } }
   .sub { color: #7d8bb5; font-size: 12px; letter-spacing: 3px; margin: 6px 0 34px; text-transform: uppercase; }
-  .badge {
-    padding: 10px 26px; border-radius: 30px; font-family: 'Orbitron', sans-serif; font-weight: 700;
-    font-size: 13px; letter-spacing: 2px; display: flex; align-items: center; gap: 10px; margin-bottom: 34px;
-  }
+  .badge { padding: 10px 26px; border-radius: 30px; font-family: 'Orbitron', sans-serif; font-weight: 700; font-size: 13px; letter-spacing: 2px; display: flex; align-items: center; gap: 10px; margin-bottom: 34px; }
   .dot { width: 10px; height: 10px; border-radius: 50%; }
   .online { background: rgba(0,255,170,0.08); border: 1px solid #00ffaa; color: #00ffaa; }
   .online .dot { background: #00ffaa; box-shadow: 0 0 10px #00ffaa; animation: pulso 1.4s infinite; }
   .offline { background: rgba(255,60,90,0.08); border: 1px solid #ff3c5a; color: #ff3c5a; }
   .offline .dot { background: #ff3c5a; box-shadow: 0 0 10px #ff3c5a; }
   @keyframes pulso { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
-
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 16px; width: 100%; max-width: 900px; }
-  .card {
-    background: linear-gradient(160deg, rgba(20,10,40,0.8), rgba(5,5,15,0.9));
-    border: 1px solid rgba(160,90,255,0.25); border-radius: 14px; padding: 20px; text-align: center;
-    box-shadow: 0 0 20px rgba(120,60,255,0.06); transition: transform .2s, box-shadow .2s;
-  }
+  .card { background: linear-gradient(160deg, rgba(20,10,40,0.8), rgba(5,5,15,0.9)); border: 1px solid rgba(160,90,255,0.25); border-radius: 14px; padding: 20px; text-align: center; box-shadow: 0 0 20px rgba(120,60,255,0.06); transition: transform .2s, box-shadow .2s; }
   .card:hover { transform: translateY(-3px); box-shadow: 0 0 24px rgba(160,80,255,0.25); }
   .card .valor { font-family: 'Orbitron', sans-serif; font-size: 26px; color: #f2f6ff; font-weight: 700; }
   .card .etiqueta { font-size: 10px; color: #8a97c2; margin-top: 8px; text-transform: uppercase; letter-spacing: 1.5px; }
-
-  .seccion { margin-top: 40px; margin-bottom: 14px; font-family: 'Orbitron', sans-serif; font-size: 13px;
-    letter-spacing: 3px; color: #a86bff; text-transform: uppercase; align-self: flex-start;
-    max-width: 900px; width: 100%; }
-
-  .barra-fondo { width: 100%; max-width: 900px; height: 16px; background: rgba(255,255,255,0.05);
-    border-radius: 10px; overflow: hidden; border: 1px solid rgba(160,90,255,0.2); }
+  .seccion { margin-top: 40px; margin-bottom: 14px; font-family: 'Orbitron', sans-serif; font-size: 13px; letter-spacing: 3px; color: #a86bff; text-transform: uppercase; align-self: flex-start; max-width: 900px; width: 100%; }
+  .barra-fondo { width: 100%; max-width: 900px; height: 16px; background: rgba(255,255,255,0.05); border-radius: 10px; overflow: hidden; border: 1px solid rgba(160,90,255,0.2); }
   .barra-relleno { height: 100%; background: linear-gradient(90deg, #00f7ff, #a24bff); box-shadow: 0 0 10px #a24bff; }
-
-  .cat-titulo { font-family: 'Orbitron', sans-serif; font-size: 14px; letter-spacing: 2px; color: #ff2ee6;
-    margin: 26px 0 12px; text-transform: uppercase; width: 100%; max-width: 900px; }
-  .cmd-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px;
-    width: 100%; max-width: 900px; }
-  .cmd-card { background: rgba(15,8,30,0.7); border: 1px solid rgba(0,247,255,0.2); border-radius: 10px;
-    padding: 12px 16px; transition: border-color .2s, box-shadow .2s; }
+  .cat-titulo { font-family: 'Orbitron', sans-serif; font-size: 14px; letter-spacing: 2px; color: #ff2ee6; margin: 26px 0 12px; text-transform: uppercase; width: 100%; max-width: 900px; }
+  .cmd-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; width: 100%; max-width: 900px; }
+  .cmd-card { background: rgba(15,8,30,0.7); border: 1px solid rgba(0,247,255,0.2); border-radius: 10px; padding: 12px 16px; transition: border-color .2s, box-shadow .2s; }
   .cmd-card:hover { border-color: #00f7ff; box-shadow: 0 0 14px rgba(0,247,255,0.25); }
   .cmd-nombre { font-family: 'Orbitron', sans-serif; font-size: 12px; color: #00f7ff; letter-spacing: 1px; }
   .cmd-desc { font-size: 11px; color: #9aa4c9; margin-top: 4px; }
-
   #qr { margin-top: 30px; }
   #qr img { border-radius: 14px; border: 2px solid rgba(160,90,255,0.4); box-shadow: 0 0 30px rgba(160,90,255,0.3); }
 </style>
@@ -1839,7 +1796,6 @@ app.get('/', (req, res) => {
   <h1>${NOMBRE_BOT.toUpperCase()}</h1>
   <div class="sub">Panel de control · ${CREADOR}</div>
   <div id="badge" class="badge offline"><div class="dot"></div>Cargando...</div>
-
   <div class="seccion">Actividad</div>
   <div class="grid">
     <div class="card"><div class="valor" id="msgIn">0</div><div class="etiqueta">Recibidos</div></div>
@@ -1847,7 +1803,6 @@ app.get('/', (req, res) => {
     <div class="card"><div class="valor" id="uptime">0s</div><div class="etiqueta">Uptime</div></div>
     <div class="card"><div class="valor" id="reint">0</div><div class="etiqueta">Reconexiones</div></div>
   </div>
-
   <div class="seccion">Cuota de IA hoy</div>
   <div class="grid">
     <div class="card" style="grid-column: 1 / -1">
@@ -1855,12 +1810,9 @@ app.get('/', (req, res) => {
       <div class="barra-fondo" style="margin-top:14px"><div class="barra-relleno" id="cuotaBarra" style="width:0%"></div></div>
     </div>
   </div>
-
   <div class="seccion" style="margin-top:50px">Comandos disponibles</div>
   ${generarHtmlComandos()}
-
   <div id="qr"></div>
-
   <script>
     async function actualizar() {
       const r = await fetch('/status');
@@ -1868,14 +1820,11 @@ app.get('/', (req, res) => {
       const badge = document.getElementById('badge');
       badge.innerHTML = '<div class="dot"></div>' + (d.conectado ? (d.botActivo ? 'CONECTADO' : 'CONECTADO (bot apagado)') : 'DESCONECTADO');
       badge.className = 'badge ' + (d.conectado ? 'online' : 'offline');
-
       document.getElementById('msgIn').textContent = d.mensajesRecibidos;
       document.getElementById('msgOut').textContent = d.mensajesEnviados;
       document.getElementById('reint').textContent = d.intentosReconexion;
-
       const h = Math.floor(d.uptimeSegundos / 3600), m = Math.floor((d.uptimeSegundos % 3600) / 60), s = d.uptimeSegundos % 60;
       document.getElementById('uptime').textContent = h + 'h ' + m + 'm ' + s + 's';
-
       document.getElementById('cuotaTexto').textContent = d.cuotaUsada + ' / ' + d.cuotaLimite;
       const pct = Math.min(100, Math.round((d.cuotaUsada / d.cuotaLimite) * 100));
       document.getElementById('cuotaBarra').style.width = pct + '%';
@@ -1900,4 +1849,3 @@ if (URL_PROPIA) {
 }
 
 iniciarBot();
-
