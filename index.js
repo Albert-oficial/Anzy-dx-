@@ -10,13 +10,7 @@ const path = require('path');
 const { exec } = require('child_process');
 
 // ── UBICACIÓN DE yt-dlp / ffmpeg ──────────────────────────────
-// IMPORTANTE: en el build command de Render debes descargar el asset
-// "yt-dlp_linux" (NO "yt-dlp" a secas). El archivo "yt-dlp" normal
-// necesita Python instalado para correr, y Render no trae Python en su
-// runtime de Node — por eso las descargas de YouTube fallaban en
-// silencio mientras TikTok seguía funcionando (TikTok tiene un respaldo
-// por API que no depende de yt-dlp). Build command correcto:
-//
+// Build command correcto en Render (usa yt-dlp_linux, NO "yt-dlp" a secas):
 // npm install && mkdir -p bin && curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux -o bin/yt-dlp && chmod +x bin/yt-dlp
 const CARPETA_BIN = path.join(__dirname, 'bin');
 const RUTA_YTDLP = fs.existsSync(path.join(CARPETA_BIN, 'yt-dlp'))
@@ -24,6 +18,45 @@ const RUTA_YTDLP = fs.existsSync(path.join(CARPETA_BIN, 'yt-dlp'))
   : 'yt-dlp';
 const HAY_FFMPEG_LOCAL = fs.existsSync(path.join(CARPETA_BIN, 'ffmpeg'));
 const ARGS_FFMPEG = HAY_FFMPEG_LOCAL ? `--ffmpeg-location "${CARPETA_BIN}"` : '';
+
+// ── COOKIES DE YOUTUBE (la solución real al bloqueo de IPs de servidor) ─
+// YouTube exige cada vez más un "PO token" para varios de sus clientes, y
+// sin eso muchos formatos de audio/video no aparecen disponibles desde
+// IPs de datacenter (Render, Railway, AWS, etc.), sin importar cuántos
+// reintentos hagas. Pasarle cookies de una cuenta real de YouTube resuelve
+// esto en la gran mayoría de los casos porque el servidor de YouTube deja
+// de tratarte como bot anónimo.
+//
+// CÓMO CONSEGUIRLAS (una sola vez):
+// 1. Instala la extensión "Get cookies.txt LOCALLY" en Chrome/Firefox.
+// 2. Entra a youtube.com ya logueado con cualquier cuenta (puede ser una
+//    cuenta nueva, no hace falta que sea la tuya principal).
+// 3. Usa la extensión para exportar las cookies del sitio youtube.com.
+// 4. Abre ese archivo .txt, copia TODO el contenido.
+// 5. En Render, crea una variable de entorno llamada YOUTUBE_COOKIES y
+//    pega ahí el contenido completo del archivo (tal cual, con saltos
+//    de línea y todo — Render acepta valores multilínea).
+//
+// Si no configuras esta variable, el bot sigue funcionando con la
+// rotación de clientes como respaldo, pero con menos éxito garantizado.
+const RUTA_COOKIES_YOUTUBE = path.join(__dirname, 'cookies_youtube.txt');
+function prepararCookiesYoutube() {
+  const contenido = process.env.YOUTUBE_COOKIES;
+  if (!contenido) {
+    console.log('⚠️ Aviso: no se configuró YOUTUBE_COOKIES. Las descargas de YouTube pueden fallar más seguido en Render por bloqueo anti-bot. Revisa las instrucciones en el código para agregarlas.');
+    return false;
+  }
+  try {
+    fs.writeFileSync(RUTA_COOKIES_YOUTUBE, contenido.trim() + '\n');
+    console.log('🍪 Cookies de YouTube cargadas correctamente.');
+    return true;
+  } catch (err) {
+    console.log('⚠️ No se pudo escribir el archivo de cookies:', err.message);
+    return false;
+  }
+}
+const HAY_COOKIES_YOUTUBE = prepararCookiesYoutube();
+const ARGS_COOKIES = HAY_COOKIES_YOUTUBE ? `--cookies "${RUTA_COOKIES_YOUTUBE}"` : '';
 
 // ── SISTEMA DE AUTOACTUALIZACIÓN (se ejecuta sola al reiniciar el bot) ─
 async function actualizarSistema() {
@@ -41,9 +74,6 @@ async function actualizarSistema() {
 }
 
 // ── LIMPIEZA DE ARCHIVOS TEMPORALES VIEJOS (anti-caídas) ────────────────
-// Si el bot se cayó a mitad de una descarga, pueden quedar archivos
-// temp_audio_/temp_video_/temp_tiktok_ tirados ocupando disco. Se limpian
-// al arrancar para evitar que el disco se llene con el tiempo.
 function limpiarArchivosTemporalesViejos() {
   try {
     const archivos = fs.readdirSync(__dirname);
@@ -59,68 +89,74 @@ function limpiarArchivosTemporalesViejos() {
   }
 }
 
+// ── EJECUTOR CON DIAGNÓSTICO REAL (antes el error se cortaba a 80
+// caracteres y nunca sabías la causa real; ahora se ve el motivo exacto
+// en los logs de Render) ────────────────────────────────────────────────
+function ejecutarComando(cmd, opciones) {
+  return new Promise((resolve, reject) => {
+    exec(cmd, opciones, (err, stdout, stderr) => {
+      if (err) {
+        const detalle = (stderr || err.message || '').trim().split('\n').slice(-6).join('\n');
+        const errorDetallado = new Error(detalle || err.message);
+        return reject(errorDetallado);
+      }
+      resolve(stdout);
+    });
+  });
+}
+
 // ── DETECTA ENLACES DE YOUTUBE ─────────────────────────────────
 const ENLACE_YOUTUBE = /(?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/shorts\/)([a-zA-Z0-9_-]{11})/;
 const MAX_INTENTOS_DESCARGA = 4;
 const DURACION_MAXIMA_SEGUNDOS = 15 * 60; // 15 minutos, aplica a audio Y video
 
 // ── ROTACIÓN DE "PLAYER CLIENTS" ANTI-BLOQUEO ───────────────────────────
-// YouTube suele bloquear IPs de servidores/nube con "Sign in to confirm
-// you're not a bot". Un solo player_client no siempre esquiva el bloqueo,
-// así que en cada reintento se prueba con un cliente distinto. Esto no
-// cambia el comando para quien lo usa, solo hace la descarga más
-// confiable en Render/Termux/VPS.
-const CLIENTES_YOUTUBE_POR_INTENTO = [
-  'android',
-  'ios',
-  'android,web',
-  'tv_embedded,web'
-];
+// ios y android suelen ser los clientes más confiables desde IPs de
+// servidor. formats=missing_pot evita que yt-dlp descarte formatos solo
+// por no tener el token de origen.
+const CLIENTES_YOUTUBE_POR_INTENTO = ['ios', 'android', 'android,web', 'tv_embedded,web'];
 function argsAntibloqueoPorIntento(intento) {
   const cliente = CLIENTES_YOUTUBE_POR_INTENTO[(intento - 1) % CLIENTES_YOUTUBE_POR_INTENTO.length];
-  return `--extractor-args "youtube:player_client=${cliente}"`;
+  return `--extractor-args "youtube:player_client=${cliente};formats=missing_pot"`;
 }
 
 async function obtenerDuracionYoutube(url) {
-  return new Promise((resolve, reject) => {
-    exec(`"${RUTA_YTDLP}" --no-warnings ${argsAntibloqueoPorIntento(1)} --print duration "${url}"`, { timeout: 30000 }, (err, stdout) => {
-      if (err) return reject(err);
-      const segundos = parseInt(String(stdout).trim(), 10);
-      if (isNaN(segundos)) return reject(new Error('No se pudo leer la duración'));
-      resolve(segundos);
-    });
-  });
+  const cmd = [
+    `"${RUTA_YTDLP}"`, '--no-warnings',
+    argsAntibloqueoPorIntento(1), ARGS_COOKIES,
+    '--print', 'duration', `"${url}"`
+  ].filter(Boolean).join(' ');
+  const stdout = await ejecutarComando(cmd, { timeout: 30000 });
+  const segundos = parseInt(String(stdout).trim(), 10);
+  if (isNaN(segundos)) throw new Error('No se pudo leer la duración');
+  return segundos;
 }
 
-// ── DESCARGAR AUDIO CON REINTENTOS Y ROTACIÓN DE CLIENTE ────────────────
+// ── DESCARGAR AUDIO CON REINTENTOS, COOKIES Y DIAGNÓSTICO ───────────────
 async function descargarAudioYoutube(url) {
   const id = url.match(ENLACE_YOUTUBE)[1];
+  let ultimoError = null;
 
   for (let intento = 1; intento <= MAX_INTENTOS_DESCARGA; intento++) {
     const archivo = path.join(__dirname, `temp_audio_${id}_${intento}.m4a`);
+    const clienteUsado = CLIENTES_YOUTUBE_POR_INTENTO[(intento - 1) % CLIENTES_YOUTUBE_POR_INTENTO.length];
 
     try {
-      console.log(`🔄 [YouTube audio] Intento ${intento} de ${MAX_INTENTOS_DESCARGA} (cliente: ${CLIENTES_YOUTUBE_POR_INTENTO[(intento - 1) % CLIENTES_YOUTUBE_POR_INTENTO.length]})...`);
+      console.log(`🔄 [YouTube audio] Intento ${intento}/${MAX_INTENTOS_DESCARGA} (cliente: ${clienteUsado}, cookies: ${HAY_COOKIES_YOUTUBE ? 'sí' : 'no'})...`);
 
-      await new Promise((resolve, reject) => {
-        const cmd = [
-          `"${RUTA_YTDLP}"`,
-          '-f', 'bestaudio[ext=m4a]/bestaudio',
-          '--no-playlist',
-          '--retries', '5',
-          '--socket-timeout', '30',
-          '--no-check-certificates',
-          argsAntibloqueoPorIntento(intento),
-          '-o', `"${archivo}"`,
-          `"${url}"`
-        ].filter(Boolean).join(' ');
+      const cmd = [
+        `"${RUTA_YTDLP}"`,
+        '-f', 'bestaudio[ext=m4a]/bestaudio',
+        '--no-playlist', '--retries', '5', '--socket-timeout', '30',
+        '--no-check-certificates',
+        argsAntibloqueoPorIntento(intento), ARGS_COOKIES,
+        '-o', `"${archivo}"`, `"${url}"`
+      ].filter(Boolean).join(' ');
 
-        exec(cmd, { timeout: 120000 }, (err) => {
-          if (err) return reject(err);
-          if (fs.existsSync(archivo) && fs.statSync(archivo).size > 5000) resolve(archivo);
-          else reject(new Error('Archivo vacío o no descargado'));
-        });
-      });
+      await ejecutarComando(cmd, { timeout: 120000 });
+      if (!fs.existsSync(archivo) || fs.statSync(archivo).size <= 5000) {
+        throw new Error('Archivo vacío o no descargado');
+      }
 
       for (let i = 1; i < intento; i++) {
         const viejo = path.join(__dirname, `temp_audio_${id}_${i}.m4a`);
@@ -129,51 +165,53 @@ async function descargarAudioYoutube(url) {
       return archivo;
 
     } catch (err) {
-      console.log(`❌ [YouTube audio] Intento ${intento} falló: ${err.message.slice(0, 80)}`);
+      ultimoError = err;
+      console.log(`❌ [YouTube audio] Intento ${intento} falló (cliente ${clienteUsado}):\n${err.message}`);
       if (fs.existsSync(archivo)) fs.unlinkSync(archivo);
       if (intento < MAX_INTENTOS_DESCARGA) await new Promise(r => setTimeout(r, 4000));
     }
   }
-  throw new Error('Falló después de varios intentos');
+  throw new Error(`Falló después de ${MAX_INTENTOS_DESCARGA} intentos. Último error: ${ultimoError?.message?.slice(0, 300) || 'desconocido'}`);
 }
 async function descargarVideoYoutube(url) {
   const id = url.match(ENLACE_YOUTUBE)[1];
+  let ultimoError = null;
+
   for (let intento = 1; intento <= MAX_INTENTOS_DESCARGA; intento++) {
     const archivo = path.join(__dirname, `temp_video_${id}_${intento}.mp4`);
+    const clienteUsado = CLIENTES_YOUTUBE_POR_INTENTO[(intento - 1) % CLIENTES_YOUTUBE_POR_INTENTO.length];
+
     try {
-      console.log(`🔄 [YouTube video] Intento ${intento} de ${MAX_INTENTOS_DESCARGA} (cliente: ${CLIENTES_YOUTUBE_POR_INTENTO[(intento - 1) % CLIENTES_YOUTUBE_POR_INTENTO.length]})...`);
-      await new Promise((resolve, reject) => {
-        const cmd = [
-          `"${RUTA_YTDLP}"`,
-          '-f', 'bv*[height<=720][ext=mp4]+ba[ext=m4a]/best[ext=mp4]/best',
-          '--no-playlist',
-          '--retries', '5',
-          '--socket-timeout', '30',
-          '--no-check-certificates',
-          '--merge-output-format', 'mp4',
-          argsAntibloqueoPorIntento(intento),
-          ARGS_FFMPEG,
-          '-o', `"${archivo}"`,
-          `"${url}"`
-        ].filter(Boolean).join(' ');
-        exec(cmd, { timeout: 180000 }, (err) => {
-          if (err) return reject(err);
-          if (fs.existsSync(archivo) && fs.statSync(archivo).size > 5000) resolve(archivo);
-          else reject(new Error('Archivo vacío o no descargado'));
-        });
-      });
+      console.log(`🔄 [YouTube video] Intento ${intento}/${MAX_INTENTOS_DESCARGA} (cliente: ${clienteUsado}, cookies: ${HAY_COOKIES_YOUTUBE ? 'sí' : 'no'})...`);
+
+      const cmd = [
+        `"${RUTA_YTDLP}"`,
+        '-f', 'bv*[height<=720][ext=mp4]+ba[ext=m4a]/best[ext=mp4]/best',
+        '--no-playlist', '--retries', '5', '--socket-timeout', '30',
+        '--no-check-certificates', '--merge-output-format', 'mp4',
+        argsAntibloqueoPorIntento(intento), ARGS_COOKIES, ARGS_FFMPEG,
+        '-o', `"${archivo}"`, `"${url}"`
+      ].filter(Boolean).join(' ');
+
+      await ejecutarComando(cmd, { timeout: 180000 });
+      if (!fs.existsSync(archivo) || fs.statSync(archivo).size <= 5000) {
+        throw new Error('Archivo vacío o no descargado');
+      }
+
       for (let i = 1; i < intento; i++) {
         const viejo = path.join(__dirname, `temp_video_${id}_${i}.mp4`);
         if (fs.existsSync(viejo)) fs.unlinkSync(viejo);
       }
       return archivo;
+
     } catch (err) {
-      console.log(`❌ [YouTube video] Intento ${intento} falló: ${err.message.slice(0, 80)}`);
+      ultimoError = err;
+      console.log(`❌ [YouTube video] Intento ${intento} falló (cliente ${clienteUsado}):\n${err.message}`);
       if (fs.existsSync(archivo)) fs.unlinkSync(archivo);
       if (intento < MAX_INTENTOS_DESCARGA) await new Promise(r => setTimeout(r, 4000));
     }
   }
-  throw new Error('Falló después de varios intentos');
+  throw new Error(`Falló después de ${MAX_INTENTOS_DESCARGA} intentos. Último error: ${ultimoError?.message?.slice(0, 300) || 'desconocido'}`);
 }
 
 // ── DETECTA ENLACES DE TIKTOK Y DESCARGA SIN MARCA DE AGUA ──────
@@ -187,31 +225,22 @@ async function descargarVideoTiktokConYtDlp(url) {
     const archivo = path.join(__dirname, `temp_tiktok_${idTemp}_${intento}.mp4`);
     try {
       console.log(`🔄 [TikTok/yt-dlp] Intento ${intento} de ${MAX_INTENTOS_TIKTOK}...`);
-      await new Promise((resolve, reject) => {
-        const cmd = [
-          `"${RUTA_YTDLP}"`,
-          '-f', 'mp4/best',
-          '--no-playlist',
-          '--retries', '5',
-          '--socket-timeout', '30',
-          '--no-check-certificates',
-          ARGS_FFMPEG,
-          '-o', `"${archivo}"`,
-          `"${url}"`
-        ].filter(Boolean).join(' ');
-        exec(cmd, { timeout: 120000 }, (err) => {
-          if (err) return reject(err);
-          if (fs.existsSync(archivo) && fs.statSync(archivo).size > 5000) resolve(archivo);
-          else reject(new Error('Archivo vacío o no descargado'));
-        });
-      });
+      const cmd = [
+        `"${RUTA_YTDLP}"`, '-f', 'mp4/best', '--no-playlist',
+        '--retries', '5', '--socket-timeout', '30', '--no-check-certificates',
+        ARGS_FFMPEG, '-o', `"${archivo}"`, `"${url}"`
+      ].filter(Boolean).join(' ');
+      await ejecutarComando(cmd, { timeout: 120000 });
+      if (!fs.existsSync(archivo) || fs.statSync(archivo).size <= 5000) {
+        throw new Error('Archivo vacío o no descargado');
+      }
       for (let i = 1; i < intento; i++) {
         const viejo = path.join(__dirname, `temp_tiktok_${idTemp}_${i}.mp4`);
         if (fs.existsSync(viejo)) fs.unlinkSync(viejo);
       }
       return archivo;
     } catch (err) {
-      console.log(`❌ [TikTok/yt-dlp] Intento ${intento} falló: ${err.message.slice(0, 80)}`);
+      console.log(`❌ [TikTok/yt-dlp] Intento ${intento} falló: ${err.message.slice(0, 150)}`);
       if (fs.existsSync(archivo)) fs.unlinkSync(archivo);
       if (intento < MAX_INTENTOS_TIKTOK) await new Promise(r => setTimeout(r, 3000));
     }
