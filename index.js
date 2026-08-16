@@ -150,7 +150,7 @@ async function descargarAudioYoutube(url) {
   let ultimoError = null;
 
   for (let intento = 1; intento <= MAX_INTENTOS_DESCARGA; intento++) {
-    const archivo = path.join(__dirname, `temp_audio_${id}_${intento}.m4a`);
+    const archivo = path.join(__dirname, `temp_audio_${id}_${intento}.mp3`);
     const clienteUsado = CLIENTES_YOUTUBE_POR_INTENTO[(intento - 1) % CLIENTES_YOUTUBE_POR_INTENTO.length];
 
     try {
@@ -158,7 +158,10 @@ async function descargarAudioYoutube(url) {
 
       const cmd = [
         `"${RUTA_YTDLP}"`,
-        '-f', 'bestaudio[ext=m4a]/bestaudio/best',
+        '-f', 'bestaudio/best',
+'--extract-audio',
+'--audio-format', 'mp3',
+'--audio-quality', '0',
 
         '--no-playlist', '--retries', '5', '--socket-timeout', '30',
         '--no-check-certificates',
