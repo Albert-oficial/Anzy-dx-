@@ -158,7 +158,8 @@ async function descargarAudioYoutube(url) {
 
       const cmd = [
         `"${RUTA_YTDLP}"`,
-        '-f', 'bestaudio[ext=m4a]/bestaudio',
+        '-f', 'bestaudio[ext=m4a]/bestaudio/best',
+
         '--no-playlist', '--retries', '5', '--socket-timeout', '30',
         '--no-check-certificates',
         argsAntibloqueoPorIntento(intento), ARGS_COOKIES,
