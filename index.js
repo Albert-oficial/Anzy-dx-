@@ -150,23 +150,32 @@ async function descargarAudioYoutube(url) {
   let ultimoError = null;
 
   for (let intento = 1; intento <= MAX_INTENTOS_DESCARGA; intento++) {
-    const archivo = path.join(__dirname, `temp_audio_${id}_${intento}.m4a`);
+    // Ya no forzamos la extensión final aquí — yt-dlp + ffmpeg deciden
+    // el nombre real del archivo tras la extracción/conversión.
+    const archivoBase = path.join(__dirname, `temp_audio_${id}_${intento}`);
+    const archivoFinal = `${archivoBase}.m4a`;
     const clienteUsado = CLIENTES_YOUTUBE_POR_INTENTO[(intento - 1) % CLIENTES_YOUTUBE_POR_INTENTO.length];
 
     try {
       console.log(`🔄 [YouTube audio] Intento ${intento}/${MAX_INTENTOS_DESCARGA} (cliente: ${clienteUsado}, cookies: ${HAY_COOKIES_YOUTUBE ? 'sí' : 'no'})...`);
 
+      // 🔧 Cambio clave: pedimos "bestaudio/best" (sin exigir m4a exacto)
+      // y usamos --extract-audio + --audio-format m4a para que ffmpeg
+      // convierta lo que sea que YouTube ofrezca. Esto evita el error
+      // "Requested format is not available" cuando el formato exacto
+      // m4a no está en la lista para ese cliente/video en particular.
       const cmd = [
         `"${RUTA_YTDLP}"`,
-        '-f', 'bestaudio[ext=m4a]/bestaudio',
+        '-f', 'bestaudio/best',
+        '--extract-audio', '--audio-format', 'm4a', '--audio-quality', '0',
         '--no-playlist', '--retries', '5', '--socket-timeout', '30',
         '--no-check-certificates',
-        argsAntibloqueoPorIntento(intento), ARGS_COOKIES,
-        '-o', `"${archivo}"`, `"${url}"`
+        argsAntibloqueoPorIntento(intento), ARGS_COOKIES, ARGS_FFMPEG,
+        '-o', `"${archivoBase}.%(ext)s"`, `"${url}"`
       ].filter(Boolean).join(' ');
 
       await ejecutarComando(cmd, { timeout: 120000 });
-      if (!fs.existsSync(archivo) || fs.statSync(archivo).size <= 5000) {
+      if (!fs.existsSync(archivoFinal) || fs.statSync(archivoFinal).size <= 5000) {
         throw new Error('Archivo vacío o no descargado');
       }
 
@@ -174,17 +183,18 @@ async function descargarAudioYoutube(url) {
         const viejo = path.join(__dirname, `temp_audio_${id}_${i}.m4a`);
         if (fs.existsSync(viejo)) fs.unlinkSync(viejo);
       }
-      return archivo;
+      return archivoFinal;
 
     } catch (err) {
       ultimoError = err;
       console.log(`❌ [YouTube audio] Intento ${intento} falló (cliente ${clienteUsado}):\n${err.message}`);
-      if (fs.existsSync(archivo)) fs.unlinkSync(archivo);
+      if (fs.existsSync(archivoFinal)) fs.unlinkSync(archivoFinal);
       if (intento < MAX_INTENTOS_DESCARGA) await new Promise(r => setTimeout(r, 4000));
     }
   }
   throw new Error(`Falló después de ${MAX_INTENTOS_DESCARGA} intentos. Último error: ${ultimoError?.message?.slice(0, 300) || 'desconocido'}`);
 }
+
 async function descargarVideoYoutube(url) {
   const id = url.match(ENLACE_YOUTUBE)[1];
   let ultimoError = null;
@@ -196,9 +206,12 @@ async function descargarVideoYoutube(url) {
     try {
       console.log(`🔄 [YouTube video] Intento ${intento}/${MAX_INTENTOS_DESCARGA} (cliente: ${clienteUsado}, cookies: ${HAY_COOKIES_YOUTUBE ? 'sí' : 'no'})...`);
 
+      // 🔧 Formato más flexible: "best" simple como última opción de la
+      // cadena, para no quedarnos sin nada si los formatos combinados
+      // (video+audio separados) no están disponibles para ese cliente.
       const cmd = [
         `"${RUTA_YTDLP}"`,
-        '-f', 'bv*[height<=720][ext=mp4]+ba[ext=m4a]/best[ext=mp4]/best',
+        '-f', 'bv*[height<=720]+ba/b[height<=720]/best',
         '--no-playlist', '--retries', '5', '--socket-timeout', '30',
         '--no-check-certificates', '--merge-output-format', 'mp4',
         argsAntibloqueoPorIntento(intento), ARGS_COOKIES, ARGS_FFMPEG,
@@ -310,7 +323,7 @@ const TU_NUMERO = '51996399291';
 const JID_DUEÑO = `${TU_NUMERO}@s.whatsapp.net`;
 const PUERTO = process.env.PORT || 3000;
 const LIMITE_DIARIO_ESTIMADO = 1400;
-const MAX_TOKENS_RESPUESTA = 500;
+const MAX_TOKENS_RESPUESTA = 1800;
 
 const COMANDO_LLAMADA_IA = '/anzy';
 
