@@ -19,39 +19,69 @@ const RUTA_YTDLP = fs.existsSync(path.join(CARPETA_BIN, 'yt-dlp'))
 const HAY_FFMPEG_LOCAL = fs.existsSync(path.join(CARPETA_BIN, 'ffmpeg'));
 const ARGS_FFMPEG = HAY_FFMPEG_LOCAL ? `--ffmpeg-location "${CARPETA_BIN}"` : '';
 
-// ── COOKIES DE YOUTUBE (la solución real al bloqueo de IPs de servidor) ─
-// YouTube exige cada vez más un "PO token" para varios de sus clientes, y
-// sin eso muchos formatos de audio/video no aparecen disponibles desde
-// IPs de datacenter (Render, Railway, AWS, etc.), sin importar cuántos
-// reintentos hagas. Pasarle cookies de una cuenta real de YouTube resuelve
-// esto en la gran mayoría de los casos porque el servidor de YouTube deja
-// de tratarte como bot anónimo.
+// ── COOKIES DE YOUTUBE (con normalización automática de formato) ───────
+// El formato Netscape que yt-dlp necesita exige TABULACIONES reales entre
+// campos. Al copiar/pegar entre apps del celular, esos tabs casi siempre
+// se convierten en espacios normales, y yt-dlp descarta cada línea como
+// inválida (eso causaba el error "Sign in to confirm you're not a bot"
+// a pesar de ya tener las cookies puestas). Esta función reconstruye el
+// archivo con tabs reales sin importar cómo llegó el texto pegado, así
+// que ya no depende de que el copy-paste mantenga el formato exacto.
 //
-// CÓMO CONSEGUIRLAS (una sola vez):
-// 1. Instala la extensión "Get cookies.txt LOCALLY" en Chrome/Firefox.
-// 2. Entra a youtube.com ya logueado con cualquier cuenta (puede ser una
-//    cuenta nueva, no hace falta que sea la tuya principal).
-// 3. Usa la extensión para exportar las cookies del sitio youtube.com.
-// 4. Abre ese archivo .txt, copia TODO el contenido.
-// 5. En Render, crea una variable de entorno llamada YOUTUBE_COOKIES y
-//    pega ahí el contenido completo del archivo (tal cual, con saltos
-//    de línea y todo — Render acepta valores multilínea).
-//
-// Si no configuras esta variable, el bot sigue funcionando con la
-// rotación de clientes como respaldo, pero con menos éxito garantizado.
+// CÓMO CONFIGURARLAS:
+// 1. Instala la extensión "Get cookies.txt LOCALLY" en Chrome/Firefox
+//    (mejor desde PC que desde celular, para evitar roturas de formato).
+// 2. Entra a youtube.com logueado con una cuenta de Google (idealmente
+//    una cuenta secundaria/desechable, no tu cuenta principal).
+// 3. Exporta las cookies de youtube.com con la extensión.
+// 4. Copia TODO el contenido del archivo .txt generado.
+// 5. En Render → tu servicio → Environment → agrega una variable:
+//    Key: YOUTUBE_COOKIES
+//    Value: pega ahí todo el contenido del archivo.
+// 6. Guarda — Render redeployará solo. Revisa los logs al arrancar:
+//    debe decir "🍪 Cookies de YouTube cargadas y normalizadas
+//    correctamente (N cookies)."
 const RUTA_COOKIES_YOUTUBE = path.join(__dirname, 'cookies_youtube.txt');
 function prepararCookiesYoutube() {
   const contenido = process.env.YOUTUBE_COOKIES;
   if (!contenido) {
-    console.log('⚠️ Aviso: no se configuró YOUTUBE_COOKIES. Las descargas de YouTube pueden fallar más seguido en Render por bloqueo anti-bot. Revisa las instrucciones en el código para agregarlas.');
+    console.log('⚠️ Aviso: no se configuró YOUTUBE_COOKIES. Las descargas de YouTube pueden fallar más seguido en Render por bloqueo anti-bot.');
     return false;
   }
+
   try {
-    fs.writeFileSync(RUTA_COOKIES_YOUTUBE, contenido.trim() + '\n');
-    console.log('🍪 Cookies de YouTube cargadas correctamente.');
+    const lineas = contenido.split(/\r?\n/);
+    const lineasNormalizadas = ['# Netscape HTTP Cookie File', ''];
+    let cookiesValidas = 0;
+
+    for (const lineaCruda of lineas) {
+      const linea = lineaCruda.trim();
+      if (!linea || linea.startsWith('#')) continue;
+
+      // Divide por CUALQUIER espacio en blanco (uno o más), sin importar
+      // si en el original eran tabs o espacios.
+      const campos = linea.split(/\s+/);
+      if (campos.length < 7) continue; // línea incompleta, se descarta
+
+      // Los primeros 6 campos son fijos; todo lo demás se une como el
+      // valor de la cookie (por si el valor tuviera algún espacio raro).
+      const [dominio, subdominios, ruta, seguro, expiracion, nombre] = campos;
+      const valor = campos.slice(6).join('');
+
+      lineasNormalizadas.push([dominio, subdominios, ruta, seguro, expiracion, nombre, valor].join('\t'));
+      cookiesValidas++;
+    }
+
+    if (cookiesValidas === 0) {
+      console.log('⚠️ YOUTUBE_COOKIES está configurada pero no se pudo leer ninguna cookie válida. Revisa que hayas copiado el archivo completo, línea por línea, sin recortar nada.');
+      return false;
+    }
+
+    fs.writeFileSync(RUTA_COOKIES_YOUTUBE, lineasNormalizadas.join('\n') + '\n');
+    console.log(`🍪 Cookies de YouTube cargadas y normalizadas correctamente (${cookiesValidas} cookies).`);
     return true;
   } catch (err) {
-    console.log('⚠️ No se pudo escribir el archivo de cookies:', err.message);
+    console.log('⚠️ No se pudo procesar el archivo de cookies:', err.message);
     return false;
   }
 }
