@@ -157,7 +157,7 @@ const MODELO_RESPALDO2 = 'gemini-3.6-flash';
 const CODIGO_DUEÑO = '2927760128';
 const NOMBRE_BOT = 'Anzy';
 const CREADOR = 'Albert Oficial';
-const VERSION_BOT = '2.09.0';
+const VERSION_BOT = '2.09.1';
 const TU_NUMERO = '51996399291';
 const JID_DUEÑO = `${TU_NUMERO}@s.whatsapp.net`;
 const PUERTO = process.env.PORT || 3000;
@@ -477,9 +477,22 @@ function obtenerNombreVisible(jid) {
   return NOMBRES_CONOCIDOS.get(numero) || `+${numero}`;
 }
 
-const JSONBIN_API_KEY = process.env.JSONBIN_API_KEY || '';
+// ── JSONBIN: limpieza estricta de la clave para evitar caracteres invisibles ──
+// Quita cualquier carácter que no sea ASCII imprimible (saltos de línea, espacios
+// de ancho cero, espacios "no separables", comillas curvas pegadas, etc.)
+function limpiarClaveJsonbin(valor) {
+  return (valor || '').replace(/[^\x20-\x7E]/g, '').trim();
+}
+
+const JSONBIN_API_KEY = limpiarClaveJsonbin(process.env.JSONBIN_API_KEY);
 const JSONBIN_BASE = 'https://api.jsonbin.io/v3/b';
-let jsonbinBinIdIntegrantes = process.env.JSONBIN_BIN_ID_INTEGRANTES || null;
+let jsonbinBinIdIntegrantes = limpiarClaveJsonbin(process.env.JSONBIN_BIN_ID_INTEGRANTES) || null;
+
+// Log de diagnóstico — no imprime la clave completa, solo su longitud y bordes,
+// para poder detectar caracteres invisibles sin exponerla en los logs.
+if (JSONBIN_API_KEY) {
+  console.log(`🔍 JSONBIN_API_KEY detectada — longitud: ${JSONBIN_API_KEY.length} caracteres (debería ser 60 en una Master Key típica)`);
+}
 
 async function jsonbinCrearBin(dataInicial, nombre) {
   const res = await fetch(JSONBIN_BASE, {
@@ -492,14 +505,20 @@ async function jsonbinCrearBin(dataInicial, nombre) {
     },
     body: JSON.stringify(dataInicial)
   });
-  if (!res.ok) throw new Error(`No se pudo crear el bin (${res.status})`);
+  if (!res.ok) {
+    const detalle = await res.text().catch(() => '');
+    throw new Error(`No se pudo crear el bin (${res.status}): ${detalle}`);
+  }
   const data = await res.json();
   return data?.metadata?.id || null;
 }
 
 async function jsonbinLeer(binId) {
   const res = await fetch(`${JSONBIN_BASE}/${binId}/latest`, { headers: { 'X-Master-Key': JSONBIN_API_KEY } });
-  if (!res.ok) throw new Error(`No se pudo leer el bin (${res.status})`);
+  if (!res.ok) {
+    const detalle = await res.text().catch(() => '');
+    throw new Error(`No se pudo leer el bin (${res.status}): ${detalle}`);
+  }
   const data = await res.json();
   return data.record;
 }
@@ -510,7 +529,10 @@ async function jsonbinGuardar(binId, data) {
     headers: { 'Content-Type': 'application/json', 'X-Master-Key': JSONBIN_API_KEY },
     body: JSON.stringify(data)
   });
-  if (!res.ok) throw new Error(`No se pudo guardar en el bin (${res.status})`);
+  if (!res.ok) {
+    const detalle = await res.text().catch(() => '');
+    throw new Error(`No se pudo guardar en el bin (${res.status}): ${detalle}`);
+  }
 }
 
 async function inicializarNubeIntegrantes() {
@@ -1332,7 +1354,7 @@ const LISTA_COMANDOS_PANEL = [
   ]},
   { cat: '👑 Propietario', items: [
     ['/propietario', 'Te reconoce por tu número y desbloquea el clan en cualquier grupo']
-  ]}, 
+  ]},
   { cat: '📋 Info', items: [
     ['/info', 'Info del bot'],
     ['/creador', 'Quién lo hizo']
