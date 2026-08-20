@@ -11,8 +11,6 @@ const { exec } = require('child_process');
 const pino = require('pino');
 
 // ── UBICACIÓN DE yt-dlp / ffmpeg ──────────────────────────────
-// Build command en Render:
-// npm install && mkdir -p bin && curl -fL https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/latest/download/yt-dlp_linux -o bin/yt-dlp && chmod +x bin/yt-dlp && bin/yt-dlp --version
 const CARPETA_BIN = path.join(__dirname, 'bin');
 const RUTA_YTDLP = fs.existsSync(path.join(CARPETA_BIN, 'yt-dlp'))
   ? path.join(CARPETA_BIN, 'yt-dlp')
@@ -52,7 +50,7 @@ function limpiarArchivosTemporalesViejos() {
     const archivos = fs.readdirSync(__dirname);
     let borrados = 0;
     for (const archivo of archivos) {
-      if (/^temp_(tiktok|facebook)_/.test(archivo)) {
+      if (/^temp_tiktok_/.test(archivo)) {
         try { fs.unlinkSync(path.join(__dirname, archivo)); borrados++; } catch {}
       }
     }
@@ -108,10 +106,6 @@ async function descargarVideoTiktokConYtDlp(url) {
   throw new Error('yt-dlp falló después de varios intentos');
 }
 
-// La API de tikwm.com reconoce publicaciones de FOTOS/slideshow con
-// audio de fondo (yt-dlp está pensado para video, no para álbumes de
-// fotos, por eso ese caso fallaba). Si es slideshow, "images" trae la
-// lista de fotos y "music" el audio de fondo.
 async function descargarVideoTiktokConAPI(url) {
   for (let intento = 1; intento <= MAX_INTENTOS_TIKTOK; intento++) {
     try {
@@ -154,96 +148,16 @@ async function descargarVideoTiktok(url) {
     return await descargarVideoTiktokConAPI(url);
   }
 }
-// ── FACEBOOK: video y audio, máximo 5 minutos ────────────────────────
-const ENLACE_FACEBOOK = /(?:https?:\/\/)?(?:www\.|m\.|web\.)?(?:facebook\.com|fb\.watch)\/[^\s]+/i;
-const PATRON_COMANDO_FACEBOOK_VIDEO = /^\/(facebook|fb)(?!audio)\b/i;
-const PATRON_COMANDO_FACEBOOK_AUDIO = /^\/(facebookaudio|fbaudio)\b/i;
-const MAX_INTENTOS_FACEBOOK = 3;
-const DURACION_MAXIMA_FACEBOOK_SEGUNDOS = 5 * 60;
-
-async function obtenerDuracionFacebook(url) {
-  const cmd = [`"${RUTA_YTDLP}"`, '--no-warnings', '--print', 'duration', `"${url}"`].join(' ');
-  const stdout = await ejecutarComando(cmd, { timeout: 30000 });
-  const segundos = parseInt(String(stdout).trim(), 10);
-  if (isNaN(segundos)) throw new Error('No se pudo leer la duración del video');
-  return segundos;
-}
-
-async function descargarVideoFacebook(url) {
-  const idTemp = Date.now();
-  let ultimoError = null;
-  for (let intento = 1; intento <= MAX_INTENTOS_FACEBOOK; intento++) {
-    const archivo = path.join(__dirname, `temp_facebook_${idTemp}_${intento}.mp4`);
-    try {
-      console.log(`🔄 [Facebook video] Intento ${intento} de ${MAX_INTENTOS_FACEBOOK}...`);
-      const cmd = [
-        `"${RUTA_YTDLP}"`, '-f', 'best[ext=mp4]/best', '--no-playlist',
-        '--retries', '5', '--socket-timeout', '30', '--no-check-certificates',
-        '--merge-output-format', 'mp4', ARGS_FFMPEG,
-        '-o', `"${archivo}"`, `"${url}"`
-      ].filter(Boolean).join(' ');
-      await ejecutarComando(cmd, { timeout: 150000 });
-      if (!fs.existsSync(archivo) || fs.statSync(archivo).size <= 5000) {
-        throw new Error('Archivo vacío o no descargado');
-      }
-      for (let i = 1; i < intento; i++) {
-        const viejo = path.join(__dirname, `temp_facebook_${idTemp}_${i}.mp4`);
-        if (fs.existsSync(viejo)) fs.unlinkSync(viejo);
-      }
-      return archivo;
-    } catch (err) {
-      ultimoError = err;
-      console.log(`❌ [Facebook video] Intento ${intento} falló: ${err.message.slice(0, 150)}`);
-      if (fs.existsSync(archivo)) fs.unlinkSync(archivo);
-      if (intento < MAX_INTENTOS_FACEBOOK) await new Promise(r => setTimeout(r, 3000));
-    }
-  }
-  throw new Error(`Falló tras ${MAX_INTENTOS_FACEBOOK} intentos: ${ultimoError?.message?.slice(0, 200) || 'desconocido'}`);
-}
-
-async function descargarAudioFacebook(url) {
-  const idTemp = Date.now();
-  let ultimoError = null;
-  for (let intento = 1; intento <= MAX_INTENTOS_FACEBOOK; intento++) {
-    const archivoBase = path.join(__dirname, `temp_facebook_audio_${idTemp}_${intento}`);
-    const archivoFinal = `${archivoBase}.mp3`;
-    try {
-      console.log(`🔄 [Facebook audio] Intento ${intento} de ${MAX_INTENTOS_FACEBOOK}...`);
-      const cmd = [
-        `"${RUTA_YTDLP}"`, '-f', 'bestaudio/best',
-        '--extract-audio', '--audio-format', 'mp3', '--audio-quality', '2',
-        '--no-playlist', '--retries', '5', '--socket-timeout', '30', '--no-check-certificates',
-        ARGS_FFMPEG, '-o', `"${archivoBase}.%(ext)s"`, `"${url}"`
-      ].filter(Boolean).join(' ');
-      await ejecutarComando(cmd, { timeout: 120000 });
-      if (!fs.existsSync(archivoFinal) || fs.statSync(archivoFinal).size <= 5000) {
-        throw new Error('Archivo vacío o no descargado');
-      }
-      for (let i = 1; i < intento; i++) {
-        const viejo = path.join(__dirname, `temp_facebook_audio_${idTemp}_${i}.mp3`);
-        if (fs.existsSync(viejo)) fs.unlinkSync(viejo);
-      }
-      return archivoFinal;
-    } catch (err) {
-      ultimoError = err;
-      console.log(`❌ [Facebook audio] Intento ${intento} falló: ${err.message.slice(0, 150)}`);
-      if (fs.existsSync(archivoFinal)) { try { fs.unlinkSync(archivoFinal); } catch {} }
-      if (intento < MAX_INTENTOS_FACEBOOK) await new Promise(r => setTimeout(r, 3000));
-    }
-  }
-  throw new Error(`Falló tras ${MAX_INTENTOS_FACEBOOK} intentos: ${ultimoError?.message?.slice(0, 200) || 'desconocido'}`);
-}
 const CLAVE_IA_PRINCIPAL = process.env.CLAVE_IA_PRINCIPAL;
 const CLAVE_IA_RESPALDO = process.env.CLAVE_IA_RESPALDO;
 const CLAVE_IA_RESPALDO2 = process.env.CLAVE_IA_RESPALDO2;
 const MODELO_PRINCIPAL = 'gemini-3.6-flash';
 const MODELO_RESPALDO = 'gemini-3.6-flash';
 const MODELO_RESPALDO2 = 'gemini-3.6-flash';
-const MODELO_IMAGEN = process.env.MODELO_IMAGEN || 'gemini-3.1-flash-image';
 const CODIGO_DUEÑO = '2927760128';
 const NOMBRE_BOT = 'Anzy';
 const CREADOR = 'Albert Oficial';
-const VERSION_BOT = '2.07.0';
+const VERSION_BOT = '2.09.0';
 const TU_NUMERO = '51996399291';
 const JID_DUEÑO = `${TU_NUMERO}@s.whatsapp.net`;
 const PUERTO = process.env.PORT || 3000;
@@ -264,15 +178,14 @@ const TEXTO_AYUDA = `╔══════════════════�
 • Mencióname, o escribe /anzy <pregunta>
 • Responde/cita un mensaje y mencióname para que lo lea también
 
-🎉 *Diversión y descargas*
-• /matrimonio @user1 @user2 — certificado de boda grupal
+🎉 *Diversión y utilidades*
 • /frase — frase random
-• /meme — meme en español
-• /perfil @usuario — actividad en el grupo
 • /tiktok <enlace> — video o foto/slideshow de TikTok sin marca de agua (también /tik tok) 🎬
-• /facebook <enlace> — video de Facebook, máx. 5 min (también /fb) 🎬
-• /facebookaudio <enlace> — audio de un video de Facebook en MP3, máx. 5 min (también /fbaudio) 🎵
-• /encuesta pregunta; opción1; opción2 — encuesta nativa
+• /perfil @usuario — actividad en el grupo
+
+💕 *Modo Novia*
+• /novia on — activo un modo más cariñoso y coqueto contigo
+• /novia off — vuelvo a mi forma normal
 
 👑 *Administración*
 • /kick @usuario — saca del grupo
@@ -280,15 +193,22 @@ const TEXTO_AYUDA = `╔══════════════════�
 • /degradar @usuario — le quita admin
 • /todos <mensaje> — etiqueta a todos
 • /cerrar · /abrir — controla quién escribe
-• /recordatorio <minutos> <texto> — aviso al grupo
+• /recordatorio <tiempo><S|M|H> <texto> — ej: /recordatorio 30M reunión
 • /ranking — top de más activas del grupo
 • /movimiento — últimos movimientos de admins 🗂️
 
+👑 *Propietario*
+• /propietario — te reconozco como dueña/o del bot; puedes agregar o eliminar integrantes del clan en cualquier grupo aunque no seas admin ahí
+
 👥 *Clan*
-• /integrantes — lista de integrantes registradas (solo admins)
+• /integrantes — lista de integrantes (admins o propietario)
+• /nombreff · /numeroff · /idff · /apodoff — registro paso a paso
+• /clan agregar Nombre; Número; ID FF; Apodo — registro en una línea
+• /clan ver <código o número> — ver una ficha
+• /eliminar <código de 2 cifras> — elimina a alguien del clan sin tocar a los demás
 
 📋 *Información*
-• /info · /creador · /reglas · /reglaspvp
+• /info · /creador
 
 🗂️ *Memoria personal*
 • /recordar — qué recuerda de ti
@@ -384,7 +304,7 @@ function guardarMemoria() {
 function agregarAMemoriaCorta(jidUsuario, texto, respuesta) {
   if (!memoriaPersistente[jidUsuario]) memoriaPersistente[jidUsuario] = [];
   memoriaPersistente[jidUsuario].push({ texto, respuesta, fecha: new Date().toISOString() });
-  if (memoriaPersistente[jidUsuario].length > 6) memoriaPersistente[jidUsuario].shift();
+  if (memoriaPersistente[jidUsuario].length > 10) memoriaPersistente[jidUsuario].shift();
   guardarMemoria();
 }
 function obtenerContextoCorto(jidUsuario) {
@@ -405,14 +325,15 @@ function registrarMensajeGrupo(jidGrupo, jidUsuario) {
 }
 
 const recordatoriosGrupo = [];
-function programarRecordatorioGrupo(jidGrupo, minutos, texto) {
-  recordatoriosGrupo.push({ jidGrupo, tiempoEjecucion: Date.now() + minutos * 60000, texto });
+function programarRecordatorioGrupo(jidGrupo, milisegundos, texto) {
+  recordatoriosGrupo.push({ jidGrupo, tiempoEjecucion: Date.now() + milisegundos, texto });
 }
 
 let botActivo = true;
 let sockActivo = null;
 
 const modoJefe = new Map();
+const modoNovia = new Map(); // clave: `${jidGrupo}:${jidUsuario}` -> true
 let estiloGlobalExtra = '';
 function esCodigoDueño(texto) {
   return texto.trim() === CODIGO_DUEÑO;
@@ -443,8 +364,12 @@ function construirClientesIA() {
 }
 const CLIENTES_IA = construirClientesIA();
 
-async function generarRespuestaIA(prompt, notasExtra) {
+async function generarRespuestaIA(prompt, notasExtra, modoNoviaActivo) {
   let reglasFinales = REGLAS_IA_BASE;
+
+  if (modoNoviaActivo) {
+    reglasFinales += `\n\n💘 MODO NOVIA ACTIVO (solo con esta persona, prioridad alta): háblale como su novia virtual — cariñosa, coqueta, un poco insinuante/"caliente" según el tono de la charla, puedes decirle "mi amor", "bebé" o similar con naturalidad. PERO nunca vulgar y NUNCA contenido sexual explícito, bajo ninguna circunstancia. Si la conversación se sube mucho de tono, redirige con cariño sin ser cortante.`;
+  }
   if (estiloGlobalExtra) {
     reglasFinales += `\n\n🔧 DIRECTIVA GLOBAL ACTIVA (aplica a TODOS los chats, prioridad máxima): ${estiloGlobalExtra}`;
   }
@@ -479,23 +404,6 @@ async function generarRespuestaIA(prompt, notasExtra) {
   throw new Error('No hay ningún token de IA configurado');
 }
 
-async function generarAvatarIA(numero) {
-  if (CLIENTES_IA.length === 0) return null;
-  try {
-    const res = await CLIENTES_IA[0].ai.models.generateContent({
-      model: MODELO_IMAGEN,
-      contents: 'Genera un avatar de perfil estilo caricatura/anime, colorido y llamativo, para usar como foto de perfil en un chat. Sin texto ni marcas de agua, fondo simple.',
-      config: { responseModalities: ['IMAGE'] }
-    });
-    const parte = res.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
-    if (parte?.inlineData?.data) return Buffer.from(parte.inlineData.data, 'base64');
-    return null;
-  } catch (err) {
-    console.log('⚠️ No se pudo generar avatar con IA:', err.message);
-    return null;
-  }
-}
-
 function obtenerIdentificadoresBot(sock) {
   const ids = new Set();
   const rawId = sock.user?.id || '';
@@ -519,7 +427,6 @@ function debeResponderIA(texto, msg, identificadoresBot) {
   return primeraPalabra === COMANDO_LLAMADA_IA;
 }
 
-// ── Extrae el texto de un mensaje citado/respondido, si existe ─────────
 function extraerTextoCitado(msg) {
   const citado = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
   if (!citado) return null;
@@ -539,6 +446,11 @@ function extraerNumero(jid) {
   return (jid || '').split('@')[0].split(':')[0];
 }
 
+function esPropietario(jid) {
+  if (!jid) return false;
+  return extraerNumero(jid) === TU_NUMERO;
+}
+
 function buscarConteoEnMapa(mapa, jid) {
   if (!mapa) return 0;
   if (mapa.has(jid)) return mapa.get(jid);
@@ -549,18 +461,12 @@ function buscarConteoEnMapa(mapa, jid) {
   return 0;
 }
 
-// ── LISTA DE IGNORADOS: números (otros bots) a los que Anzy nunca ──────
-// responde. Configúralo en Render: NUMEROS_IGNORADOS=51987654321,51911111111
 const NUMEROS_IGNORADOS = (process.env.NUMEROS_IGNORADOS || '')
   .split(',').map(n => n.trim()).filter(Boolean);
 function esNumeroIgnorado(jid) {
   return NUMEROS_IGNORADOS.includes(extraerNumero(jid));
 }
 
-// ── CACHÉ DE NOMBRES: guarda el pushName real de cada persona que
-// escribe, para mostrar nombres legibles en vez de IDs internos tipo
-// "uild22294011283" (eso pasa cuando WhatsApp identifica a alguien con
-// un @lid en vez del número de teléfono real). ──────────────────────────
 const NOMBRES_CONOCIDOS = new Map();
 function registrarNombreConocido(jid, pushName) {
   if (!pushName) return;
@@ -705,15 +611,7 @@ function registrarAccionAdmin(sock, jidGrupo, accionOriginal, jidEjecutor, jidsO
   if (registroMovimientos.length > MAX_REGISTROS_MOVIMIENTOS) registroMovimientos.shift();
   guardarMovimientos();
 
-  const info = ETIQUETAS_MOVIMIENTO[accion] || { icono: '•', texto: accion };
-  sock.sendMessage(JID_DUEÑO, { text: `${info.icono} *Movimiento en el grupo*\n\n${formatearMovimiento(jidGrupo, entrada)}` }).catch(() => {});
-}
-
-function comandoMatrimonio(mencionados) {
-  if (mencionados.length < 2) return { texto: 'Menciona a los dos: /matrimonio @novio @novia', mentions: [] };
-  const [a, b] = mencionados;
-  const texto = `💍 *CERTIFICADO DE MATRIMONIO* 💍\n\nPor la presente, @${a.split('@')[0]} y @${b.split('@')[0]} quedan unidas en santo matrimonio grupal.\n\n¡Felicidades a la pareja! 🎉🥂`;
-  return { texto, mentions: [a, b] };
+  sock.sendMessage(JID_DUEÑO, { text: formatearMovimiento(jidGrupo, entrada) }).catch(() => {});
 }
 
 const FRASES_RANDOM = [
@@ -723,52 +621,6 @@ const FRASES_RANDOM = [
   'Mejor sola que mal acompañada, mejor acompañada que aburrida 💕'
 ];
 function comandoFrase() { return FRASES_RANDOM[Math.floor(Math.random() * FRASES_RANDOM.length)]; }
-
-const FRASES_DESPEDIDA = [
-  'Se fue @NUM... el grupo seguirá brillando igual 💅',
-  '@NUM se fue, seguro anda buscando dónde brillar más 😌',
-  'Una persona menos hueveando por acá, chau @NUM 💕',
-  '@NUM desapareció más rápido que la plata en quincena 💸😂',
-  'Se fue @NUM, ya se extrañaba la paz por acá 😌✌️',
-  '@NUM salió disparada, ni Flash corre así 💀🔥',
-  'Adiós @NUM, no le avisen a nadie que se fue, capaz ni notan la diferencia 😂',
-  'Chau @NUM, la puerta queda abierta pero no creo que la necesites de nuevo 👋'
-];
-function comandoDespedidaAleatoria(numero) {
-  const base = FRASES_DESPEDIDA[Math.floor(Math.random() * FRASES_DESPEDIDA.length)];
-  return base.replace('@NUM', `@${numero}`);
-}
-
-const SUBREDDITS_MEME_ES = ['memesenespanol', 'chistes', 'humor'];
-async function comandoMeme(sock, jidGrupo) {
-  for (const sub of SUBREDDITS_MEME_ES) {
-    try {
-      const res = await fetch(`https://meme-api.com/gimme/${sub}`);
-      const data = await res.json();
-      if (data?.url && !data.nsfw) {
-        await sock.sendMessage(jidGrupo, { image: { url: data.url }, caption: data.title || '😂' });
-        return;
-      }
-    } catch (err) {
-      console.log(`⚠️ Meme falló en r/${sub}:`, err.message);
-    }
-  }
-  await sock.sendMessage(jidGrupo, { text: 'No pude traer un meme ahorita 😅' });
-}
-
-async function comandoEncuesta(sock, jidGrupo, textoCompleto) {
-  const partes = textoCompleto.split(';').map(p => p.trim()).filter(Boolean);
-  if (partes.length < 3) {
-    await sock.sendMessage(jidGrupo, { text: 'Formato: /encuesta pregunta; opción1; opción2' });
-    return;
-  }
-  const [pregunta, ...opciones] = partes;
-  try {
-    await sock.sendMessage(jidGrupo, { poll: { name: pregunta, values: opciones, selectableCount: 1 } });
-  } catch (err) {
-    await sock.sendMessage(jidGrupo, { text: 'No pude crear la encuesta, revisa la versión de Baileys.' });
-  }
-}
 
 async function comandoRanking(sock, jidGrupo) {
   const mapa = contadorMensajesGrupo.get(jidGrupo);
@@ -796,6 +648,12 @@ async function esAdminGrupo(sock, jidGrupo, jidUsuario) {
   }
 }
 
+// Admin del grupo O propietario del bot (por número) — usado en todo lo relacionado al clan
+async function tienePermisoClan(sock, jidGrupo, jidUsuario) {
+  if (esPropietario(jidUsuario)) return true;
+  return await esAdminGrupo(sock, jidGrupo, jidUsuario);
+}
+
 async function comandoPerfil(sock, jidGrupo, jidUsuario, mencionJid) {
   const jidObjetivo = mencionJid || jidUsuario;
   const mapa = contadorMensajesGrupo.get(jidGrupo);
@@ -805,6 +663,25 @@ async function comandoPerfil(sock, jidGrupo, jidUsuario, mencionJid) {
   await sock.sendMessage(jidGrupo, { text, mentions: [jidObjetivo] });
 }
 
+function generarCodigoUnico(jidGrupo) {
+  const lista = integrantesClan[jidGrupo] || [];
+  const usados = new Set(lista.map(i => i.codigo).filter(Boolean));
+  let codigo;
+  do {
+    codigo = String(Math.floor(Math.random() * 100)).padStart(2, '0');
+  } while (usados.has(codigo));
+  return codigo;
+}
+
+function asegurarCodigosClan(jidGrupo) {
+  const lista = integrantesClan[jidGrupo] || [];
+  let cambiado = false;
+  for (const ficha of lista) {
+    if (!ficha.codigo) { ficha.codigo = generarCodigoUnico(jidGrupo); cambiado = true; }
+  }
+  if (cambiado) guardarIntegrantes();
+}
+
 function agregarIntegrante(jidGrupo, datos) {
   if (!integrantesClan[jidGrupo]) integrantesClan[jidGrupo] = [];
   const numeroLimpio = extraerNumero(datos.numero) || datos.numero;
@@ -812,11 +689,11 @@ function agregarIntegrante(jidGrupo, datos) {
     (datos.idFF && i.idFF === datos.idFF) || extraerNumero(i.numero) === numeroLimpio
   );
   if (existente) {
-    Object.assign(existente, datos, { fecha: existente.fecha });
+    Object.assign(existente, datos, { fecha: existente.fecha, codigo: existente.codigo || generarCodigoUnico(jidGrupo) });
     guardarIntegrantes();
     return { actualizado: true, ficha: existente };
   }
-  const ficha = { ...datos, fecha: new Date().toISOString() };
+  const ficha = { ...datos, codigo: generarCodigoUnico(jidGrupo), fecha: new Date().toISOString() };
   integrantesClan[jidGrupo].push(ficha);
   guardarIntegrantes();
   return { actualizado: false, ficha };
@@ -825,7 +702,8 @@ function agregarIntegrante(jidGrupo, datos) {
 function quitarIntegrante(jidGrupo, criterio) {
   const lista = integrantesClan[jidGrupo] || [];
   const criterioLimpio = extraerNumero(criterio) || criterio;
-  const indice = lista.findIndex(i => i.idFF === criterio || extraerNumero(i.numero) === criterioLimpio);
+  const criterioCodigo = String(criterio).trim().padStart(2, '0');
+  const indice = lista.findIndex(i => i.idFF === criterio || extraerNumero(i.numero) === criterioLimpio || i.codigo === criterioCodigo);
   if (indice === -1) return false;
   lista.splice(indice, 1);
   guardarIntegrantes();
@@ -833,24 +711,26 @@ function quitarIntegrante(jidGrupo, criterio) {
 }
 
 function buscarIntegrante(jidGrupo, criterio) {
+  asegurarCodigosClan(jidGrupo);
   const lista = integrantesClan[jidGrupo] || [];
   const criterioLimpio = extraerNumero(criterio) || criterio;
-  return lista.find(i => i.idFF === criterio || extraerNumero(i.numero) === criterioLimpio) || null;
+  const criterioCodigo = String(criterio).trim().padStart(2, '0');
+  return lista.find(i => i.idFF === criterio || extraerNumero(i.numero) === criterioLimpio || i.codigo === criterioCodigo) || null;
 }
 
 function obtenerEtiquetaPersona(jidGrupo, criterio) {
-  if (!criterio) return 'Desconocida';
+  if (!criterio) return 'Desconocido';
   const numero = extraerNumero(criterio) || criterio;
   const ficha = buscarIntegrante(jidGrupo, numero);
-  if (ficha) return `${ficha.apodo || ficha.nombre} (+${numero})`;
+  if (ficha) return ficha.apodo || ficha.nombre;
   const nombreCache = NOMBRES_CONOCIDOS.get(numero);
-  if (nombreCache) return `${nombreCache} (+${numero})`;
-  return `+${numero}`;
+  if (nombreCache) return nombreCache;
+  return 'Miembro del grupo';
 }
 
-function formatearFichaIntegrante(ficha, posicion) {
+function formatearFichaIntegrante(ficha) {
   return `┏━━━━━━━━━━━━━━━━━━━┓
-┃   INTEGRANTE Nº ${String(posicion).padStart(2, '0')}
+┃  INTEGRANTE #${ficha.codigo}
 ┗━━━━━━━━━━━━━━━━━━━┛
 👤 Nombre  : ${ficha.nombre}
 📱 Número  : ${ficha.numero}
@@ -859,15 +739,16 @@ function formatearFichaIntegrante(ficha, posicion) {
 }
 
 function generarTextoListaClan(jidGrupo) {
+  asegurarCodigosClan(jidGrupo);
   const lista = integrantesClan[jidGrupo] || [];
   if (!lista.length) return '📋 Aún no hay integrantes registradas en el clan.';
-  const cuerpo = lista.map((ficha, i) => formatearFichaIntegrante(ficha, i + 1)).join('\n\n');
-  return `╔═══════════════════════╗\n   INTEGRANTES DEL CLAN (${lista.length})\n╚═══════════════════════╝\n\n${cuerpo}`;
+  const cuerpo = lista.map(ficha => formatearFichaIntegrante(ficha)).join('\n\n');
+  return `╔═══════════════════════╗\n   INTEGRANTES DEL CLAN (${lista.length})\n╚═══════════════════════╝\n\n${cuerpo}\n\n💡 Usa /eliminar <código> para quitar a alguien de la lista.`;
 }
 
 async function comandoClanAgregar(sock, jidGrupo, jidUsuario, textoCompleto) {
-  if (!(await esAdminGrupo(sock, jidGrupo, jidUsuario))) {
-    await sock.sendMessage(jidGrupo, { text: 'Solo las admins pueden registrar integrantes 🚫' });
+  if (!(await tienePermisoClan(sock, jidGrupo, jidUsuario))) {
+    await sock.sendMessage(jidGrupo, { text: 'Solo las admins o el propietario pueden registrar integrantes 🚫' });
     return;
   }
   const partes = textoCompleto.split(';').map(p => p.trim()).filter(Boolean);
@@ -877,26 +758,46 @@ async function comandoClanAgregar(sock, jidGrupo, jidUsuario, textoCompleto) {
   }
   const [nombre, numero, idFF, apodo] = partes;
   const { actualizado, ficha } = agregarIntegrante(jidGrupo, { nombre, numero, idFF, apodo, agregadoPor: jidUsuario.split('@')[0] });
-  const posicion = integrantesClan[jidGrupo].indexOf(ficha) + 1;
-  await sock.sendMessage(jidGrupo, { text: `${actualizado ? '✏️ Ficha actualizada' : '✅ Integrante registrada'}:\n\n${formatearFichaIntegrante(ficha, posicion)}` });
+  await sock.sendMessage(jidGrupo, { text: `${actualizado ? '✏️ Ficha actualizada' : '✅ Integrante registrada'}:\n\n${formatearFichaIntegrante(ficha)}` });
 }
 
 async function comandoClanQuitar(sock, jidGrupo, jidUsuario, criterio) {
-  if (!(await esAdminGrupo(sock, jidGrupo, jidUsuario))) {
-    await sock.sendMessage(jidGrupo, { text: 'Solo las admins pueden quitar integrantes 🚫' });
+  if (!(await tienePermisoClan(sock, jidGrupo, jidUsuario))) {
+    await sock.sendMessage(jidGrupo, { text: 'Solo las admins o el propietario pueden quitar integrantes 🚫' });
     return;
   }
-  if (!criterio) { await sock.sendMessage(jidGrupo, { text: 'Uso: /clan quitar <número o ID FF>' }); return; }
+  if (!criterio) { await sock.sendMessage(jidGrupo, { text: 'Uso: /clan quitar <número, ID FF o código>' }); return; }
   const ok = quitarIntegrante(jidGrupo, criterio);
-  await sock.sendMessage(jidGrupo, { text: ok ? '🗑️ Integrante eliminada de la lista.' : 'No encontré a nadie con ese número o ID FF.' });
+  await sock.sendMessage(jidGrupo, { text: ok ? '🗑️ Integrante eliminada de la lista.' : 'No encontré a nadie con ese dato.' });
 }
 
 async function comandoClanVer(sock, jidGrupo, criterio) {
-  if (!criterio) { await sock.sendMessage(jidGrupo, { text: 'Uso: /clan ver <número o ID FF>' }); return; }
+  if (!criterio) { await sock.sendMessage(jidGrupo, { text: 'Uso: /clan ver <número, ID FF o código>' }); return; }
   const ficha = buscarIntegrante(jidGrupo, criterio);
-  if (!ficha) { await sock.sendMessage(jidGrupo, { text: 'No encontré a nadie con ese número o ID FF.' }); return; }
-  const posicion = (integrantesClan[jidGrupo] || []).indexOf(ficha) + 1;
-  await sock.sendMessage(jidGrupo, { text: formatearFichaIntegrante(ficha, posicion) });
+  if (!ficha) { await sock.sendMessage(jidGrupo, { text: 'No encontré a nadie con ese dato.' }); return; }
+  await sock.sendMessage(jidGrupo, { text: formatearFichaIntegrante(ficha) });
+}
+
+async function comandoEliminarPorCodigo(sock, jidGrupo, jidUsuario, codigo) {
+  if (!(await tienePermisoClan(sock, jidGrupo, jidUsuario))) {
+    await sock.sendMessage(jidGrupo, { text: 'Solo las admins o el propietario pueden eliminar integrantes 🚫' });
+    return;
+  }
+  if (!codigo || !/^\d{1,2}$/.test(codigo)) {
+    await sock.sendMessage(jidGrupo, { text: 'Uso: /eliminar <código de dos cifras>\nEj: /eliminar 07\n\nRevisa los códigos con /integrantes' });
+    return;
+  }
+  asegurarCodigosClan(jidGrupo);
+  const codigoNormalizado = codigo.padStart(2, '0');
+  const lista = integrantesClan[jidGrupo] || [];
+  const indice = lista.findIndex(i => i.codigo === codigoNormalizado);
+  if (indice === -1) {
+    await sock.sendMessage(jidGrupo, { text: `No encontré a nadie con el código ${codigoNormalizado}. Usa /integrantes para revisar la lista.` });
+    return;
+  }
+  const [eliminada] = lista.splice(indice, 1);
+  guardarIntegrantes();
+  await sock.sendMessage(jidGrupo, { text: `🗑️ Eliminada del clan: *${eliminada.apodo || eliminada.nombre}* (código ${codigoNormalizado}). Las demás integrantes no fueron afectadas.` });
 }
 
 const borradoresIntegrante = new Map();
@@ -911,11 +812,11 @@ function actualizarBorrador(jidGrupo, jidUsuario, campo, valor) {
 function borradorCompleto(borrador) {
   return !!(borrador && borrador.nombre && borrador.numero && borrador.idFF && borrador.apodo);
 }
-const ETIQUETAS_CAMPO_BORRADOR = { nombre: '/nombre agg', numero: '/numero agg', idFF: '/id ff agg', apodo: '/apodo agg' };
+const ETIQUETAS_CAMPO_BORRADOR = { nombre: '/nombreff', numero: '/numeroff', idFF: '/idff', apodo: '/apodoff' };
 
 async function comandoCampoIntegrante(sock, jidGrupo, jidUsuario, campo, valor) {
-  if (!(await esAdminGrupo(sock, jidGrupo, jidUsuario))) {
-    await sock.sendMessage(jidGrupo, { text: 'Solo las admins pueden registrar integrantes 🚫' });
+  if (!(await tienePermisoClan(sock, jidGrupo, jidUsuario))) {
+    await sock.sendMessage(jidGrupo, { text: 'Solo las admins o el propietario pueden registrar integrantes 🚫' });
     return;
   }
   if (!valor) {
@@ -929,8 +830,7 @@ async function comandoCampoIntegrante(sock, jidGrupo, jidUsuario, campo, valor) 
       agregadoPor: jidUsuario.split('@')[0]
     });
     borradoresIntegrante.delete(claveBorrador(jidGrupo, jidUsuario));
-    const posicion = integrantesClan[jidGrupo].indexOf(ficha) + 1;
-    await sock.sendMessage(jidGrupo, { text: `${actualizado ? '✏️ Ficha actualizada' : '✅ ¡Integrante registrada!'} 💖\n\n${formatearFichaIntegrante(ficha, posicion)}` });
+    await sock.sendMessage(jidGrupo, { text: `${actualizado ? '✏️ Ficha actualizada' : '✅ ¡Integrante registrada!'} 💖\n\n${formatearFichaIntegrante(ficha)}` });
   } else {
     const faltan = ['nombre', 'numero', 'idFF', 'apodo'].filter(c => !borrador[c]).map(c => ETIQUETAS_CAMPO_BORRADOR[c]);
     await sock.sendMessage(jidGrupo, { text: `📝 Anoté "${valor}" ✅\n\nMe falta: ${faltan.join(', ')}` });
@@ -941,17 +841,17 @@ function formatearMovimiento(jidGrupo, r) {
   const info = ETIQUETAS_MOVIMIENTO[r.accion] || { icono: '•', texto: r.accion };
   const fecha = new Date(r.fecha).toLocaleString('es-PE', { timeZone: 'America/Lima', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
   const ejecutorTexto = obtenerEtiquetaPersona(jidGrupo, r.ejecutor);
-  let linea = `${info.icono} ${fecha}\n👤 ${ejecutorTexto}`;
+  let cuerpo = `┌─────────────────────┐\n│ ${info.icono}  MOVIMIENTO DE GRUPO\n└─────────────────────┘\n\n👤 *Realizado por:* ${ejecutorTexto}\n📌 *Acción:* ${info.texto}`;
   if (r.objetivos && r.objetivos.length) {
-    linea += `\n   ↳ ${info.texto} ${r.objetivos.map(n => obtenerEtiquetaPersona(jidGrupo, n)).join(', ')}`;
-  } else {
-    linea += `\n   ↳ ${info.texto}`;
+    const nombres = r.objetivos.map(n => obtenerEtiquetaPersona(jidGrupo, n)).join(', ');
+    cuerpo += `\n🎯 *Afectado(s):* ${nombres}`;
   }
-  return linea;
+  cuerpo += `\n🕐 *Fecha:* ${fecha}`;
+  return cuerpo;
 }
 
 async function comandoMovimientos(sock, jidGrupo, jidUsuario, argumentoTexto) {
-  if (!(await esAdminGrupo(sock, jidGrupo, jidUsuario))) {
+  if (!(await esAdminGrupo(sock, jidGrupo, jidUsuario)) && !esPropietario(jidUsuario)) {
     await sock.sendMessage(jidGrupo, { text: 'Solo las admins pueden ver los movimientos del grupo 🚫' });
     return;
   }
@@ -1046,120 +946,6 @@ Escribe /comandos para ver todo lo que puedo hacer.`;
 
 const TEXTO_CREADOR = `💖 Fui creada con mucho cariño por *${CREADOR}*, ingeniero de sistemas y estudiante de programación que sigue mejorándome cada día. ¡Gracias por todo, Albert! 🙌✨`;
 
-const TEXTO_REGLAS = `╔════════════════════════╗
-            🏆 REGLAMENTO OFICIAL
-                          DEL CLAN 🏆
-╚════════════════════════╝
-
-Bienvenida al clan. [STX] OFICIAL
-
-El objetivo de este reglamento es mantener el orden, el respeto y la competitividad entre todas las integrantes. Al permanecer en el clan, cada miembro acepta cumplir las siguientes normas.
-
-━━━━━━━━━━━━━━━━━━━━━━
-🚫 REGLAS NO PERMITIDAS
-━━━━━━━━━━━━━━━━━━━━━━
-
-❌ Enviar contenido gore.
-❌ Enviar contenido pornográfico (+18).
-❌ Insultar o faltar el respeto a cualquier integrante.
-❌ Generar discusiones o conflictos dentro del grupo.
-❌ Enviar stickers fuera de contexto.
-❌ Hacer spam o promocionar otros clanes.
-
-━━━━━━━━━━━━━━━━━━━━━━
-✅ OBLIGACIONES DEL MIEMBRO
-━━━━━━━━━━━━━━━━━━━━━━
-
-✔ Mantener una participación activa dentro del clan.
-✔ Obtener un mínimo de *2,000 placas por semana*.
-✔ Participar en guerras de clanes, torneos y partidas amistosas cuando sea convocada.
-✔ Mantenerse atenta a los anuncios y comunicados oficiales.
-✔ Cualquier duda, sugerencia o reclamo deberá dirigirse únicamente a las administradoras.
-✔ El cambio de iniciales del clan solo podrá realizarse después de un período mínimo de *3 meses*.
-
-━━━━━━━━━━━━━━━━━━━━━━
-🎁 RECOMPENSAS OFICIALES
-━━━━━━━━━━━━━━━━━━━━━━
-
-💎 *100 Diamantes*
-Para la jugadora más destacada de la semana.
-
-🔥 *300 Diamantes*
-Toda integrante que consiga *25,000 placas durante la semana* recibirá una recompensa de *300 diamantes*, previa verificación por parte de la administración.
-
-🎫 *Pase Élite*
-Se realizará un sorteo de *1 Pase Élite* el día *28 de cada mes*.
-
-⚔ *PVP con premios*
-Cada integrante de la escuadra ganadora recibirá *100 diamantes*.
-
-🏆 *Reconocimiento Semanal*
-La jugadora con mayor cantidad de placas será reconocida como la mejor integrante de la semana.
-
-━━━━━━━━━━━━━━━━━━━━━━
-⚠ SISTEMA DE SANCIONES
-━━━━━━━━━━━━━━━━━━━━━━
-
-🟡 Primera falta: Advertencia.
-🟠 Segunda falta: Suspensión temporal de actividades del clan.
-🔴 Tercera falta: Expulsión definitiva del clan, según decisión de la administración.
-
-━━━━━━━━━━━━━━━━━━━━━━
-🏆 COMPROMISO DEL CLAN
-━━━━━━━━━━━━━━━━━━━━━━
-
-Nuestro objetivo es formar un clan competitivo, organizado y respetuoso, donde cada integrante contribuya al crecimiento del equipo mediante su actividad, disciplina y juego limpio.
-
-El incumplimiento de cualquiera de las normas podrá ser sancionado por la administración.
-
-         ⚔ JUEGA LIMPIO • COMPITE CON HONOR • REPRESENTA AL CLAN ⚔`;
-
-const TEXTO_REGLAS_PVP = `⚔ REGLAMENTO OFICIAL DE PVP ⚔
-
-Los PVP del clan están diseñados para demostrar únicamente la habilidad de cada jugadora.
-
-🚫 Queda estrictamente prohibido el uso de cualquier tipo de ventaja ilegal, incluyendo:
-• Fake Lag.
-• Hologramas.
-• Aimbot.
-• Cualquier otra ventaja que altere el desarrollo normal de la partida.
-
-━━━━━━━━━━━━━━━━━━━━━━
-🧬 HABILIDADES PERMITIDAS
-━━━━━━━━━━━━━━━━━━━━━━
-
-✅ Alok.
-✅ Kelly.
-✅ Ayato.
-✅ Maxim.
-
-No se permitirá el uso de ninguna otra habilidad.
-
-━━━━━━━━━━━━━━━━━━━━━━
-🔫 ARMAS PERMITIDAS
-━━━━━━━━━━━━━━━━━━━━━━
-
-✔ Desert Eagle.
-✔ M10.
-✔ M1887.
-
-No se permitirá el uso de armas distintas a las mencionadas.
-
-━━━━━━━━━━━━━━━━━━━━━━
-📌 REGLAS DEL COMBATE
-━━━━━━━━━━━━━━━━━━━━━━
-
-• Está prohibido encerrarse durante el enfrentamiento.
-• No está permitido dejar morir a la rival por la zona.
-• Cada enfrentamiento deberá realizarse respetando el orden establecido.
-• Los combates serán *1 vs 1*.
-• Ninguna integrante podrá intervenir en el duelo de otra compañera.
-• Está estrictamente prohibido que dos o más jugadoras ataquen a una sola rival.
-
-El incumplimiento de cualquiera de estas reglas ocasionará que el enfrentamiento sea declarado *NO VÁLIDO*.
-
-La escuadra rival será declarada vencedora automáticamente y avanzará a la siguiente ronda.`;
-
 async function procesarComandoJefe(sock, remitente, texto) {
   const t = texto.toLowerCase().trim();
   if (t === 'salir' || t.includes('salir del menu') || t.includes('salir del menú') || t.includes('modo normal')) {
@@ -1230,77 +1016,6 @@ async function procesarMensajeGrupo(sock, msg, identificadoresBot) {
     return;
   }
 
-  // ── FACEBOOK AUDIO (revisar ANTES que video, porque el patrón de
-  // video usa un lookahead negativo para no atrapar "/facebookaudio") ──
-  if (PATRON_COMANDO_FACEBOOK_AUDIO.test(texto)) {
-    const enlace = texto.replace(PATRON_COMANDO_FACEBOOK_AUDIO, '').trim();
-    if (!ENLACE_FACEBOOK.test(enlace)) {
-      await sock.sendMessage(jidGrupo, { text: '🎵 Escríbelo así:\n/facebookaudio enlace-de-facebook\n(el video debe durar 5 minutos o menos, también funciona /fbaudio)' });
-      return;
-    }
-    await sock.sendMessage(jidGrupo, { text: '🔎 Revisando la duración del video 💖' });
-    let duracion;
-    try {
-      duracion = await obtenerDuracionFacebook(enlace);
-    } catch (err) {
-      console.log(`❌ [Facebook audio] Falló verificación de duración:\n${err.message}`);
-      await sock.sendMessage(jidGrupo, { text: '💔 No pude revisar ese video, intenta con otro enlace 🙏' });
-      return;
-    }
-    if (duracion > DURACION_MAXIMA_FACEBOOK_SEGUNDOS) {
-      await sock.sendMessage(jidGrupo, { text: '⏱️ Ese video dura más de 5 minutos, no puedo sacarle el audio. Prueba con uno más corto 🙏💖' });
-      return;
-    }
-    await sock.sendMessage(jidGrupo, { text: '🎵 ¡Listo! Preparando tu audio 💖✨' });
-    let rutaAudio = null;
-    try {
-      rutaAudio = await descargarAudioFacebook(enlace);
-      await sock.sendMessage(jidGrupo, { audio: { url: rutaAudio }, mimetype: 'audio/mpeg' });
-      console.log('✅ Audio de Facebook enviado correctamente');
-    } catch (err) {
-      console.error('❌ Error descargando audio de Facebook:', err.message);
-      await sock.sendMessage(jidGrupo, { text: '💔 No pude preparar el audio. Intenta más tarde o con otro enlace 🙏💖' });
-    } finally {
-      if (rutaAudio && fs.existsSync(rutaAudio)) { try { fs.unlinkSync(rutaAudio); } catch {} }
-    }
-    return;
-  }
-
-  // ── FACEBOOK VIDEO (máx. 5 min) ────────────────────────────────────
-  if (PATRON_COMANDO_FACEBOOK_VIDEO.test(texto)) {
-    const enlace = texto.replace(PATRON_COMANDO_FACEBOOK_VIDEO, '').trim();
-    if (!ENLACE_FACEBOOK.test(enlace)) {
-      await sock.sendMessage(jidGrupo, { text: '💙 Escríbelo así:\n/facebook enlace-de-facebook\n(el video debe durar 5 minutos o menos, también funciona /fb)' });
-      return;
-    }
-    await sock.sendMessage(jidGrupo, { text: '🔎 Revisando la duración del video 💖' });
-    let duracion;
-    try {
-      duracion = await obtenerDuracionFacebook(enlace);
-    } catch (err) {
-      console.log(`❌ [Facebook video] Falló verificación de duración:\n${err.message}`);
-      await sock.sendMessage(jidGrupo, { text: '💔 No pude revisar ese video, intenta con otro enlace 🙏' });
-      return;
-    }
-    if (duracion > DURACION_MAXIMA_FACEBOOK_SEGUNDOS) {
-      await sock.sendMessage(jidGrupo, { text: '⏱️ Ese video dura más de 5 minutos, no lo puedo descargar. Prueba con uno más corto 🙏💖' });
-      return;
-    }
-    await sock.sendMessage(jidGrupo, { text: '🎬 ¡Listo! Preparando tu video de Facebook 💖✨' });
-    let rutaVideo = null;
-    try {
-      rutaVideo = await descargarVideoFacebook(enlace);
-      await sock.sendMessage(jidGrupo, { video: { url: rutaVideo }, caption: '🎥 ¡Aquí está tu video! ✨' });
-      console.log('✅ Video de Facebook enviado correctamente');
-    } catch (err) {
-      console.error('❌ Error descargando video de Facebook:', err.message);
-      await sock.sendMessage(jidGrupo, { text: '💔 No pude preparar el video. Intenta más tarde o con otro enlace 🙏💖' });
-    } finally {
-      if (rutaVideo && fs.existsSync(rutaVideo)) { try { fs.unlinkSync(rutaVideo); } catch {} }
-    }
-    return;
-  }
-
   if (esIntencionCompra(texto)) {
     try {
       await sock.sendMessage(jidGrupo, { text: 'Dame un toque que le aviso a Alberto para que te atienda directo 🙌', mentions: [jidUsuario] });
@@ -1309,18 +1024,18 @@ async function procesarMensajeGrupo(sock, msg, identificadoresBot) {
     return;
   }
 
-  const matchNombre = texto.match(/^\/nombre\s+agg\s+(.+)/i);
+  const matchNombre = texto.match(/^\/nombreff\s+(.+)/i);
   if (matchNombre) { await comandoCampoIntegrante(sock, jidGrupo, jidUsuario, 'nombre', matchNombre[1].trim()); return; }
-  const matchNumero = texto.match(/^\/numero\s+agg\s+(.+)/i);
+  const matchNumero = texto.match(/^\/numeroff\s+(.+)/i);
   if (matchNumero) { await comandoCampoIntegrante(sock, jidGrupo, jidUsuario, 'numero', matchNumero[1].trim()); return; }
-  const matchIdFF = texto.match(/^\/id\s*ff\s+agg\s+(.+)/i);
+  const matchIdFF = texto.match(/^\/idff\s+(.+)/i);
   if (matchIdFF) { await comandoCampoIntegrante(sock, jidGrupo, jidUsuario, 'idFF', matchIdFF[1].trim()); return; }
-  const matchApodo = texto.match(/^\/apodo\s+agg\s+(.+)/i);
+  const matchApodo = texto.match(/^\/apodoff\s+(.+)/i);
   if (matchApodo) { await comandoCampoIntegrante(sock, jidGrupo, jidUsuario, 'apodo', matchApodo[1].trim()); return; }
 
   if (textoLower === '/integrantes') {
-    if (!(await esAdminGrupo(sock, jidGrupo, jidUsuario))) {
-      await sock.sendMessage(jidGrupo, { text: 'Solo las admins pueden ver la lista del clan 🚫' });
+    if (!(await tienePermisoClan(sock, jidGrupo, jidUsuario))) {
+      await sock.sendMessage(jidGrupo, { text: 'Solo las admins o el propietario pueden ver la lista del clan 🚫' });
       return;
     }
     await sock.sendMessage(jidGrupo, { text: generarTextoListaClan(jidGrupo) });
@@ -1334,31 +1049,57 @@ async function procesarMensajeGrupo(sock, msg, identificadoresBot) {
 
   try {
     switch (comando) {
-      case '/matrimonio': { const { texto: t, mentions } = comandoMatrimonio(mencionados); await sock.sendMessage(jidGrupo, { text: t, mentions }); return; }
       case '/frase': await sock.sendMessage(jidGrupo, { text: comandoFrase() }); return;
-      case '/meme': await comandoMeme(sock, jidGrupo); return;
-      case '/encuesta': await comandoEncuesta(sock, jidGrupo, resto.join(' ')); return;
       case '/perfil': await comandoPerfil(sock, jidGrupo, jidUsuario, mencionados[0]); return;
       case '/ranking': { const { texto: t, mentions } = await comandoRanking(sock, jidGrupo); await sock.sendMessage(jidGrupo, { text: t, mentions }); return; }
-      case '/kick': case '/eliminar': case '/sacar': case '/ban': await comandoKick(sock, jidGrupo, jidUsuario, mencionados); return;
+      case '/kick': case '/sacar': case '/ban': await comandoKick(sock, jidGrupo, jidUsuario, mencionados); return;
       case '/promover': await comandoPromoverDegradar(sock, jidGrupo, jidUsuario, mencionados, 'promote'); return;
       case '/degradar': await comandoPromoverDegradar(sock, jidGrupo, jidUsuario, mencionados, 'demote'); return;
       case '/todos': await comandoTodos(sock, jidGrupo, jidUsuario, resto.join(' ')); return;
       case '/cerrar': await comandoCerrarGrupo(sock, jidGrupo, jidUsuario, true); return;
       case '/abrir': await comandoCerrarGrupo(sock, jidGrupo, jidUsuario, false); return;
+      case '/eliminar': await comandoEliminarPorCodigo(sock, jidGrupo, jidUsuario, resto[0]); return;
+      case '/propietario': {
+        if (esPropietario(jidUsuario)) {
+          await sock.sendMessage(jidGrupo, { text: '👑 Te reconozco como propietaria/o del bot. Puedes agregar o eliminar integrantes del clan en este grupo aunque no seas admin aquí.' });
+        } else {
+          await sock.sendMessage(jidGrupo, { text: 'Este comando es solo para el propietario del bot 🚫' });
+        }
+        return;
+      }
+      case '/novia': {
+        const sub = (resto[0] || '').toLowerCase();
+        const claveNovia = `${jidGrupo}:${jidUsuario}`;
+        if (sub === 'on') {
+          modoNovia.set(claveNovia, true);
+          await sock.sendMessage(jidGrupo, { text: '💕 Listo mi amor, activé el modo novia solo para ti... ahora te voy a hablar distinto 😘' });
+        } else if (sub === 'off') {
+          modoNovia.delete(claveNovia);
+          await sock.sendMessage(jidGrupo, { text: '💫 Ok, volví a mi forma normal contigo.' });
+        } else {
+          await sock.sendMessage(jidGrupo, { text: 'Uso:\n/novia on — activa el modo novia\n/novia off — lo desactiva' });
+        }
+        return;
+      }
       case '/recordatorio': {
         if (!(await esAdminGrupo(sock, jidGrupo, jidUsuario))) { await sock.sendMessage(jidGrupo, { text: 'Solo admins pueden programar recordatorios 🚫' }); return; }
-        const minutos = parseInt(resto[0], 10);
+        const entrada = resto[0] || '';
         const textoRecordatorio = resto.slice(1).join(' ');
-        if (!minutos || !textoRecordatorio) { await sock.sendMessage(jidGrupo, { text: 'Uso: /recordatorio 30 avisar la reunión' }); return; }
-        programarRecordatorioGrupo(jidGrupo, minutos, textoRecordatorio);
-        await sock.sendMessage(jidGrupo, { text: `⏰ Listo, aviso en ${minutos} min: "${textoRecordatorio}"` });
+        const match = entrada.match(/^(\d+)([smh])$/i);
+        if (!match || !textoRecordatorio) {
+          await sock.sendMessage(jidGrupo, { text: 'Uso: /recordatorio <tiempo><S|M|H> <texto>\nEj:\n/recordatorio 30S avisar\n/recordatorio 15M avisar\n/recordatorio 10H avisar' });
+          return;
+        }
+        const cantidad = parseInt(match[1], 10);
+        const unidad = match[2].toLowerCase();
+        const multiplicador = unidad === 's' ? 1000 : unidad === 'm' ? 60000 : 3600000;
+        const etiquetaUnidad = unidad === 's' ? 'segundos' : unidad === 'm' ? 'minutos' : 'horas';
+        programarRecordatorioGrupo(jidGrupo, cantidad * multiplicador, textoRecordatorio);
+        await sock.sendMessage(jidGrupo, { text: `⏰ Listo, aviso en ${cantidad} ${etiquetaUnidad}: "${textoRecordatorio}"` });
         return;
       }
       case '/info': await sock.sendMessage(jidGrupo, { text: generarTextoInfo() }); return;
       case '/creador': await sock.sendMessage(jidGrupo, { text: TEXTO_CREADOR }); return;
-      case '/reglas': await sock.sendMessage(jidGrupo, { text: TEXTO_REGLAS }); return;
-      case '/reglaspvp': await sock.sendMessage(jidGrupo, { text: TEXTO_REGLAS_PVP }); return;
       case '/recordar': {
         const lista = memoriaPersistente[jidUsuario] || [];
         if (!lista.length) { await sock.sendMessage(jidGrupo, { text: 'Aún no tengo nada guardado de ti 🤔' }); return; }
@@ -1398,7 +1139,8 @@ async function procesarMensajeGrupo(sock, msg, identificadoresBot) {
     if (textoCitado) notas += `\n\nMENSAJE CITADO (a lo que está respondiendo ${nombreContacto}): "${textoCitado}"`;
     notas += obtenerContextoCorto(jidUsuario);
 
-    const respuesta = await generarRespuestaIA(consultaLimpia, notas);
+    const noviaActiva = modoNovia.get(`${jidGrupo}:${jidUsuario}`) || false;
+    const respuesta = await generarRespuestaIA(consultaLimpia, notas, noviaActiva);
     await enviarRespuestaHumanizada(sock, jidGrupo, respuesta, [jidUsuario]);
     agregarAMemoriaCorta(jidUsuario, texto, respuesta);
   } catch (err) {
@@ -1421,26 +1163,13 @@ function registrarBienvenidasYDespedidas(sock) {
         registrarAccionAdmin(sock, jidGrupo, action, author || null, [jidParticipante]);
       }
       try {
-        if (action === 'add') {
-          let fotoUrl = null;
-          try { fotoUrl = await sock.profilePictureUrl(jidParticipante, 'image'); } catch (err) { fotoUrl = null; }
-          const texto = `🎉 ¡Bienvenida al grupo, @${numero}! Espero la pases chévere por acá 🙌`;
-          if (fotoUrl) {
-            await sock.sendMessage(jidGrupo, { image: { url: fotoUrl }, caption: texto, mentions: [jidParticipante] });
-          } else {
-            const fotoGenerada = await generarAvatarIA(numero);
-            if (fotoGenerada) await sock.sendMessage(jidGrupo, { image: fotoGenerada, caption: texto, mentions: [jidParticipante] });
-            else await sock.sendMessage(jidGrupo, { image: { url: `https://api.dicebear.com/7.x/adventurer/png?seed=${numero}` }, caption: texto, mentions: [jidParticipante] });
-          }
-        } else if (action === 'remove') {
-          await sock.sendMessage(jidGrupo, { text: comandoDespedidaAleatoria(numero), mentions: [jidParticipante] });
-        } else if (action === 'promote') {
+        if (action === 'promote') {
           await sock.sendMessage(jidGrupo, { text: `⭐ @${numero} ahora es admin del grupo.`, mentions: [jidParticipante] });
         } else if (action === 'demote') {
           await sock.sendMessage(jidGrupo, { text: `🔻 @${numero} ya no es admin.`, mentions: [jidParticipante] });
         }
       } catch (err) {
-        console.log('⚠️ Error en bienvenida/despedida:', err.message);
+        console.log('⚠️ Error en aviso de admin:', err.message);
       }
     }
   });
@@ -1531,6 +1260,14 @@ async function iniciarBot() {
           });
           return;
         }
+        if (textoPersonal.toLowerCase() === '/propietario') {
+          if (esPropietario(remitente)) {
+            await sock.sendMessage(remitente, { text: '👑 Te reconozco como propietaria/o del bot. Puedes agregar o eliminar integrantes del clan en cualquier grupo aunque no seas admin ahí.' });
+          } else {
+            await sock.sendMessage(remitente, { text: 'Este comando es solo para el propietario del bot 🚫' });
+          }
+          return;
+        }
         if (modoJefe.get(remitente)) {
           await procesarComandoJefe(sock, remitente, textoPersonal);
           return;
@@ -1574,14 +1311,14 @@ const LISTA_COMANDOS_PANEL = [
     ['/anzy <pregunta>', 'Pregúntale a la IA'],
     ['@bot <pregunta>', 'Mencionando al bot']
   ]},
-  { cat: '🎉 Diversión y descargas', items: [
-    ['/matrimonio @user1 @user2', 'Certificado de boda grupal'],
+  { cat: '🎉 Diversión y utilidades', items: [
     ['/tiktok · /tik tok <enlace>', 'Video o fotos de TikTok sin marca de agua 🎬'],
-    ['/facebook · /fb <enlace>', 'Video de Facebook, máx. 5 min 🎬'],
-    ['/facebookaudio · /fbaudio <enlace>', 'Audio de Facebook en MP3, máx. 5 min 🎵'],
     ['/frase', 'Frase random'],
-    ['/meme', 'Meme en español'],
     ['/perfil @user', 'Actividad en el grupo']
+  ]},
+  { cat: '💕 Modo Novia', items: [
+    ['/novia on', 'Activa un modo cariñoso y coqueto conmigo'],
+    ['/novia off', 'Vuelve a mi forma normal']
   ]},
   { cat: '👑 Admin', items: [
     ['/kick @user', 'Saca del grupo'],
@@ -1589,19 +1326,26 @@ const LISTA_COMANDOS_PANEL = [
     ['/degradar @user', 'Le quita admin'],
     ['/todos <msj>', 'Etiqueta a todos'],
     ['/cerrar · /abrir', 'Controla quién escribe'],
-    ['/encuesta preg; op1; op2', 'Encuesta nativa'],
-    ['/recordatorio <min> <texto>', 'Aviso al grupo'],
+    ['/recordatorio <n>S/M/H <texto>', 'Aviso al grupo, ej: 30M'],
     ['/ranking', 'Top de más activas'],
     ['/movimiento', 'Últimos movimientos de admins 🗂️']
   ]},
-  { cat: '👥 Clan', items: [
-    ['/integrantes', 'Lista de integrantes (solo admins)']
+  { cat: '👑 Propietario', items: [
+    ['/propietario', 'Te reconoce por tu número y desbloquea el clan en cualquier grupo']
+  ]},
+  { cat: '👥 Clan · registro paso a paso', items: [
+    ['/nombreff <nombre>', 'Guarda el nombre'],
+    ['/numeroff <número>', 'Guarda el número'],
+    ['/idff <ID>', 'Guarda el ID FF'],
+    ['/apodoff <apodo>', 'Guarda el apodo (al completar los 4, se guarda solo)'],
+    ['/clan ver <código o número>', 'Ver una ficha'],
+    ['/clan quitar <código o número>', 'Eliminar una ficha'],
+    ['/eliminar <código de 2 cifras>', 'Elimina a una integrante sin afectar a las demás'],
+    ['/integrantes', 'Lista completa con códigos (admins o propietario)']
   ]},
   { cat: '📋 Info', items: [
     ['/info', 'Info del bot'],
-    ['/creador', 'Quién lo hizo'],
-    ['/reglas', 'Reglamento del clan'],
-    ['/reglaspvp', 'Reglas de PvP']
+    ['/creador', 'Quién lo hizo']
   ]},
   { cat: '🗂️ Memoria personal', items: [
     ['/recordar', 'Ver qué recuerda de ti'],
@@ -1646,36 +1390,45 @@ app.get('/', (req, res) => {
 <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Space+Mono&display=swap" rel="stylesheet">
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { background: radial-gradient(circle at 20% 0%, #10041f 0%, #000000 55%, #000000 100%); color: #d7e6ff; font-family: 'Space Mono', monospace; min-height: 100vh; display: flex; flex-direction: column; align-items: center; padding: 50px 20px 70px; overflow-x: hidden; }
-  h1 { font-family: 'Orbitron', sans-serif; font-weight: 900; font-size: 42px; letter-spacing: 8px; background: linear-gradient(90deg, #00f7ff, #a24bff, #ff2ee6, #00f7ff); background-size: 300% auto; -webkit-background-clip: text; background-clip: text; color: transparent; animation: brillo 6s linear infinite; text-align: center; }
+  body { background: radial-gradient(circle at 20% 0%, #240a1c 0%, #06010a 55%, #000000 100%); color: #ffe3f3; font-family: 'Space Mono', monospace; min-height: 100vh; display: flex; flex-direction: column; align-items: center; padding: 50px 20px 70px; overflow-x: hidden; position: relative; }
+  .blob { position: fixed; border-radius: 50%; filter: blur(90px); opacity: 0.35; z-index: 0; pointer-events: none; }
+  .blob1 { width: 380px; height: 380px; background: #ff2ee6; top: -100px; left: -120px; animation: flotar1 12s ease-in-out infinite; }
+  .blob2 { width: 320px; height: 320px; background: #a24bff; bottom: -80px; right: -100px; animation: flotar2 14s ease-in-out infinite; }
+  .blob3 { width: 260px; height: 260px; background: #ff6ec7; top: 40%; left: 60%; animation: flotar1 16s ease-in-out infinite reverse; }
+  @keyframes flotar1 { 0%,100% { transform: translate(0,0); } 50% { transform: translate(40px,60px); } }
+  @keyframes flotar2 { 0%,100% { transform: translate(0,0); } 50% { transform: translate(-50px,-30px); } }
+  h1 { font-family: 'Orbitron', sans-serif; font-weight: 900; font-size: 42px; letter-spacing: 8px; background: linear-gradient(90deg, #ff2ee6, #ff6ec7, #b83bff, #ff2ee6); background-size: 300% auto; -webkit-background-clip: text; background-clip: text; color: transparent; animation: brillo 6s linear infinite; text-align: center; position: relative; z-index: 1; text-shadow: 0 0 30px rgba(255,46,230,0.35); }
   @keyframes brillo { to { background-position: 300% center; } }
-  .sub { color: #7d8bb5; font-size: 12px; letter-spacing: 3px; margin: 6px 0 34px; text-transform: uppercase; }
-  .badge { padding: 10px 26px; border-radius: 30px; font-family: 'Orbitron', sans-serif; font-weight: 700; font-size: 13px; letter-spacing: 2px; display: flex; align-items: center; gap: 10px; margin-bottom: 34px; }
+  .sub { color: #d99cc9; font-size: 12px; letter-spacing: 3px; margin: 6px 0 34px; text-transform: uppercase; position: relative; z-index: 1; }
+  .badge { padding: 10px 26px; border-radius: 30px; font-family: 'Orbitron', sans-serif; font-weight: 700; font-size: 13px; letter-spacing: 2px; display: flex; align-items: center; gap: 10px; margin-bottom: 34px; position: relative; z-index: 1; }
   .dot { width: 10px; height: 10px; border-radius: 50%; }
   .online { background: rgba(0,255,170,0.08); border: 1px solid #00ffaa; color: #00ffaa; }
   .online .dot { background: #00ffaa; box-shadow: 0 0 10px #00ffaa; animation: pulso 1.4s infinite; }
   .offline { background: rgba(255,60,90,0.08); border: 1px solid #ff3c5a; color: #ff3c5a; }
   .offline .dot { background: #ff3c5a; box-shadow: 0 0 10px #ff3c5a; }
   @keyframes pulso { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 16px; width: 100%; max-width: 900px; }
-  .card { background: linear-gradient(160deg, rgba(20,10,40,0.8), rgba(5,5,15,0.9)); border: 1px solid rgba(160,90,255,0.25); border-radius: 14px; padding: 20px; text-align: center; box-shadow: 0 0 20px rgba(120,60,255,0.06); transition: transform .2s, box-shadow .2s; }
-  .card:hover { transform: translateY(-3px); box-shadow: 0 0 24px rgba(160,80,255,0.25); }
-  .card .valor { font-family: 'Orbitron', sans-serif; font-size: 26px; color: #f2f6ff; font-weight: 700; }
-  .card .etiqueta { font-size: 10px; color: #8a97c2; margin-top: 8px; text-transform: uppercase; letter-spacing: 1.5px; }
-  .seccion { margin-top: 40px; margin-bottom: 14px; font-family: 'Orbitron', sans-serif; font-size: 13px; letter-spacing: 3px; color: #a86bff; text-transform: uppercase; align-self: flex-start; max-width: 900px; width: 100%; }
-  .barra-fondo { width: 100%; max-width: 900px; height: 16px; background: rgba(255,255,255,0.05); border-radius: 10px; overflow: hidden; border: 1px solid rgba(160,90,255,0.2); }
-  .barra-relleno { height: 100%; background: linear-gradient(90deg, #00f7ff, #a24bff); box-shadow: 0 0 10px #a24bff; }
-  .cat-titulo { font-family: 'Orbitron', sans-serif; font-size: 14px; letter-spacing: 2px; color: #ff2ee6; margin: 26px 0 12px; text-transform: uppercase; width: 100%; max-width: 900px; }
-  .cmd-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; width: 100%; max-width: 900px; }
-  .cmd-card { background: rgba(15,8,30,0.7); border: 1px solid rgba(0,247,255,0.2); border-radius: 10px; padding: 12px 16px; transition: border-color .2s, box-shadow .2s; }
-  .cmd-card:hover { border-color: #00f7ff; box-shadow: 0 0 14px rgba(0,247,255,0.25); }
-  .cmd-nombre { font-family: 'Orbitron', sans-serif; font-size: 12px; color: #00f7ff; letter-spacing: 1px; }
-  .cmd-desc { font-size: 11px; color: #9aa4c9; margin-top: 4px; }
-  #qr { margin-top: 30px; }
-  #qr img { border-radius: 14px; border: 2px solid rgba(160,90,255,0.4); box-shadow: 0 0 30px rgba(160,90,255,0.3); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 16px; width: 100%; max-width: 900px; position: relative; z-index: 1; }
+  .card { background: linear-gradient(160deg, rgba(40,8,32,0.85), rgba(10,4,12,0.9)); border: 1px solid rgba(255,80,190,0.3); border-radius: 14px; padding: 20px; text-align: center; box-shadow: 0 0 20px rgba(255,60,180,0.08); transition: transform .2s, box-shadow .2s; }
+  .card:hover { transform: translateY(-3px); box-shadow: 0 0 26px rgba(255,60,180,0.3); }
+  .card .valor { font-family: 'Orbitron', sans-serif; font-size: 26px; color: #ffe3f3; font-weight: 700; }
+  .card .etiqueta { font-size: 10px; color: #d99cc9; margin-top: 8px; text-transform: uppercase; letter-spacing: 1.5px; }
+  .seccion { margin-top: 40px; margin-bottom: 14px; font-family: 'Orbitron', sans-serif; font-size: 13px; letter-spacing: 3px; color: #ff6ec7; text-transform: uppercase; align-self: flex-start; max-width: 900px; width: 100%; position: relative; z-index: 1; }
+  .barra-fondo { width: 100%; max-width: 900px; height: 16px; background: rgba(255,255,255,0.05); border-radius: 10px; overflow: hidden; border: 1px solid rgba(255,80,190,0.25); position: relative; z-index: 1; }
+  .barra-relleno { height: 100%; background: linear-gradient(90deg, #ff2ee6, #a24bff); box-shadow: 0 0 10px #ff2ee6; }
+  .cat-titulo { font-family: 'Orbitron', sans-serif; font-size: 14px; letter-spacing: 2px; color: #ff6ec7; margin: 26px 0 12px; text-transform: uppercase; width: 100%; max-width: 900px; position: relative; z-index: 1; }
+  .cmd-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; width: 100%; max-width: 900px; position: relative; z-index: 1; }
+  .cmd-card { background: rgba(30,6,24,0.75); border: 1px solid rgba(255,110,199,0.25); border-radius: 10px; padding: 12px 16px; transition: border-color .2s, box-shadow .2s; }
+  .cmd-card:hover { border-color: #ff2ee6; box-shadow: 0 0 16px rgba(255,46,230,0.3); }
+  .cmd-nombre { font-family: 'Orbitron', sans-serif; font-size: 12px; color: #ff6ec7; letter-spacing: 1px; }
+  .cmd-desc { font-size: 11px; color: #d99cc9; margin-top: 4px; }
+  #qr { margin-top: 30px; position: relative; z-index: 1; }
+  #qr img { border-radius: 14px; border: 2px solid rgba(255,80,190,0.4); box-shadow: 0 0 30px rgba(255,60,180,0.3); }
 </style>
 </head>
 <body>
+  <div class="blob blob1"></div>
+  <div class="blob blob2"></div>
+  <div class="blob blob3"></div>
   <h1>${NOMBRE_BOT.toUpperCase()}</h1>
   <div class="sub">Panel de control · ${CREADOR}</div>
   <div id="badge" class="badge offline"><div class="dot"></div>Cargando...</div>
