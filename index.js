@@ -157,7 +157,7 @@ const MODELO_RESPALDO2 = 'gemini-3.6-flash';
 const CODIGO_DUEÑO = '2927760128';
 const NOMBRE_BOT = 'Anzy';
 const CREADOR = 'Albert Oficial';
-const VERSION_BOT = '2.09.1';
+const VERSION_BOT = '2.10.0';
 const TU_NUMERO = '51996399291';
 const JID_DUEÑO = `${TU_NUMERO}@s.whatsapp.net`;
 const PUERTO = process.env.PORT || 3000;
@@ -170,6 +170,7 @@ if (!CLAVE_IA_PRINCIPAL) console.log('❌ ALERTA: no se detectó CLAVE_IA_PRINCI
 if (!CLAVE_IA_RESPALDO) console.log('⚠️ Aviso: no se detectó CLAVE_IA_RESPALDO.');
 if (!CLAVE_IA_RESPALDO2) console.log('⚠️ Aviso: no se detectó CLAVE_IA_RESPALDO2.');
 
+// ── Lista de comandos PÚBLICA (la ven todos al escribir /comando anzy) ──────
 const TEXTO_AYUDA = `╔═══════════════════════╗
    COMANDOS · ${NOMBRE_BOT}
 ╚═══════════════════════╝
@@ -197,22 +198,26 @@ const TEXTO_AYUDA = `╔══════════════════�
 • /ranking — top de más activas del grupo
 • /movimiento — últimos movimientos de admins 🗂️
 
-👑 *Propietario*
-• /propietario — te reconozco como dueña/o del bot; puedes agregar o eliminar integrantes del clan en cualquier grupo aunque no seas admin ahí
-
-👥 *Clan*
-• /integrantes — lista de integrantes (admins o propietario)
-• /nombreff · /numeroff · /idff · /apodoff — registro paso a paso
-• /clan agregar Nombre; Número; ID FF; Apodo — registro en una línea
-• /clan ver <código o número> — ver una ficha
-• /eliminar <código de 2 cifras> — elimina a alguien del clan sin tocar a los demás
-
 📋 *Información*
 • /info · /creador
+• /comando anzy — ver esta lista
 
 🗂️ *Memoria personal*
 • /recordar — qué recuerda de ti
 • /olvidarme — borra su memoria de ti`;
+
+// ── Lista EXTENDIDA (solo la ve quien esté verificado como propietario) ─────
+const TEXTO_AYUDA_PROPIETARIO = `${TEXTO_AYUDA}
+
+👑 *Solo propietario*
+• /propietario — verificarte con contraseña
+• /nombreff · /numeroff · /idff · /apodoff — registro paso a paso del clan
+• /clan agregar Nombre; Número; ID FF; Apodo
+• /clan ver <código o número> · /clan quitar <código o número>
+• /eliminar <código de 2 cifras> — elimina a alguien del clan
+• /integrantes — lista completa del clan con códigos
+• /silencio @usuario — el bot deja de responderle por completo
+• /activarse @usuario — el bot vuelve a responderle`;
 
 const PALABRAS_CRISIS = [
   'quiero morir', 'no quiero vivir', 'suicidar', 'suicidio', 'matarme',
@@ -339,17 +344,18 @@ function esCodigoDueño(texto) {
   return texto.trim() === CODIGO_DUEÑO;
 }
 
+// ── OPTIMIZACIÓN DE VELOCIDAD: delay de "escribiendo" reducido ──────────────
 function calcularTiempoTecleo(texto) {
-  const ms = texto.length * 35;
-  return Math.min(Math.max(ms, 800), 4000);
+  const ms = texto.length * 12;
+  return Math.min(Math.max(ms, 300), 1500);
 }
 
 async function enviarRespuestaHumanizada(sock, jid, texto, mentions) {
   try {
-    await sock.sendPresenceUpdate('composing', jid);
+    sock.sendPresenceUpdate('composing', jid).catch(() => {});
     await new Promise(r => setTimeout(r, calcularTiempoTecleo(texto)));
     await sock.sendMessage(jid, { text: texto, mentions: mentions || [] });
-    await sock.sendPresenceUpdate('paused', jid);
+    sock.sendPresenceUpdate('paused', jid).catch(() => {});
   } catch (err) {
     console.log('⚠️ Error en envío humanizado:', err.message);
   }
@@ -396,7 +402,7 @@ async function generarRespuestaIA(prompt, notasExtra, modoNoviaActivo) {
   }
 
   if (CLIENTES_IA.length > 0) {
-    await new Promise(r => setTimeout(r, 1500));
+    await new Promise(r => setTimeout(r, 700));
     const r = await intentar(CLIENTES_IA[0]);
     registrarUsoIA();
     return r;
@@ -446,9 +452,16 @@ function extraerNumero(jid) {
   return (jid || '').split('@')[0].split(':')[0];
 }
 
+// ── PROPIETARIO: número real + verificación por contraseña ──────────────────
 function esPropietario(jid) {
   if (!jid) return false;
   return extraerNumero(jid) === TU_NUMERO;
+}
+const propietariosVerificados = new Set(); // números que pasaron la contraseña
+const pendientesPropietario = new Map();   // clave -> true, esperando que escriban la contraseña
+function esPropietarioEfectivo(jid) {
+  if (!jid) return false;
+  return esPropietario(jid) || propietariosVerificados.has(extraerNumero(jid));
 }
 
 function buscarConteoEnMapa(mapa, jid) {
@@ -461,10 +474,28 @@ function buscarConteoEnMapa(mapa, jid) {
   return 0;
 }
 
+// ── SILENCIADOS: números a los que el bot ignora por completo ───────────────
+const ARCHIVO_SILENCIADOS = path.join(__dirname, 'silenciados.json');
+function cargarSilenciados() {
+  try { return new Set(JSON.parse(fs.readFileSync(ARCHIVO_SILENCIADOS, 'utf-8'))); }
+  catch (err) { return new Set(); }
+}
+let SILENCIADOS = cargarSilenciados();
+let guardadoSilenciadosPendiente = null;
+function guardarSilenciados() {
+  if (guardadoSilenciadosPendiente) clearTimeout(guardadoSilenciadosPendiente);
+  guardadoSilenciadosPendiente = setTimeout(() => {
+    fs.writeFile(ARCHIVO_SILENCIADOS, JSON.stringify([...SILENCIADOS]), (err) => {
+      if (err) console.log('⚠️ Error guardando silenciados:', err.message);
+    });
+  }, 1000);
+}
+
 const NUMEROS_IGNORADOS = (process.env.NUMEROS_IGNORADOS || '')
   .split(',').map(n => n.trim()).filter(Boolean);
 function esNumeroIgnorado(jid) {
-  return NUMEROS_IGNORADOS.includes(extraerNumero(jid));
+  const numero = extraerNumero(jid);
+  return NUMEROS_IGNORADOS.includes(numero) || SILENCIADOS.has(numero);
 }
 
 const NOMBRES_CONOCIDOS = new Map();
@@ -478,8 +509,6 @@ function obtenerNombreVisible(jid) {
 }
 
 // ── JSONBIN: limpieza estricta de la clave para evitar caracteres invisibles ──
-// Quita cualquier carácter que no sea ASCII imprimible (saltos de línea, espacios
-// de ancho cero, espacios "no separables", comillas curvas pegadas, etc.)
 function limpiarClaveJsonbin(valor) {
   return (valor || '').replace(/[^\x20-\x7E]/g, '').trim();
 }
@@ -488,8 +517,6 @@ const JSONBIN_API_KEY = limpiarClaveJsonbin(process.env.JSONBIN_API_KEY);
 const JSONBIN_BASE = 'https://api.jsonbin.io/v3/b';
 let jsonbinBinIdIntegrantes = limpiarClaveJsonbin(process.env.JSONBIN_BIN_ID_INTEGRANTES) || null;
 
-// Log de diagnóstico — no imprime la clave completa, solo su longitud y bordes,
-// para poder detectar caracteres invisibles sin exponerla en los logs.
 if (JSONBIN_API_KEY) {
   console.log(`🔍 JSONBIN_API_KEY detectada — longitud: ${JSONBIN_API_KEY.length} caracteres (debería ser 60 en una Master Key típica)`);
 }
@@ -670,9 +697,9 @@ async function esAdminGrupo(sock, jidGrupo, jidUsuario) {
   }
 }
 
-// Admin del grupo O propietario del bot (por número) — usado en todo lo relacionado al clan
+// Admin del grupo O propietario (real o verificado por contraseña)
 async function tienePermisoClan(sock, jidGrupo, jidUsuario) {
-  if (esPropietario(jidUsuario)) return true;
+  if (esPropietarioEfectivo(jidUsuario)) return true;
   return await esAdminGrupo(sock, jidGrupo, jidUsuario);
 }
 
@@ -873,7 +900,7 @@ function formatearMovimiento(jidGrupo, r) {
 }
 
 async function comandoMovimientos(sock, jidGrupo, jidUsuario, argumentoTexto) {
-  if (!(await esAdminGrupo(sock, jidGrupo, jidUsuario)) && !esPropietario(jidUsuario)) {
+  if (!(await esAdminGrupo(sock, jidGrupo, jidUsuario)) && !esPropietarioEfectivo(jidUsuario)) {
     await sock.sendMessage(jidGrupo, { text: 'Solo las admins pueden ver los movimientos del grupo 🚫' });
     return;
   }
@@ -963,7 +990,7 @@ function generarTextoInfo() {
 🟢 Estado: ${estado.conectado ? 'Conectada y activa' : 'Desconectada'}
 ⏱ Tiempo activa: ${uptimeH}h
 
-Escribe /comandos para ver todo lo que puedo hacer.`;
+Escribe /comando anzy para ver todo lo que puedo hacer.`;
 }
 
 const TEXTO_CREADOR = `💖 Fui creada con mucho cariño por *${CREADOR}*, ingeniero de sistemas y estudiante de programación que sigue mejorándome cada día. ¡Gracias por todo, Albert! 🙌✨`;
@@ -1002,8 +1029,28 @@ async function procesarMensajeGrupo(sock, msg, identificadoresBot) {
   if (esNumeroIgnorado(jidUsuario)) return;
   registrarNombreConocido(jidUsuario, msg.pushName);
 
+  // ── Si está esperando la contraseña de propietario, interceptamos aquí ────
+  const clavePendientePropietario = `${jidGrupo}:${jidUsuario}`;
+  if (pendientesPropietario.has(clavePendientePropietario)) {
+    pendientesPropietario.delete(clavePendientePropietario);
+    if (texto.trim() === CODIGO_DUEÑO) {
+      propietariosVerificados.add(extraerNumero(jidUsuario));
+      await sock.sendMessage(jidGrupo, { text: '👑 Contraseña correcta. Te reconozco como propietaria/o del bot en este chat — ya puedes agregar o eliminar integrantes del clan y silenciar usuarios.' });
+    } else {
+      await sock.sendMessage(jidGrupo, { text: '❌ Contraseña incorrecta. Escribe /propietario para intentar de nuevo.' });
+    }
+    return;
+  }
+
   registrarMensajeGrupo(jidGrupo, jidUsuario);
   const textoLower = texto.toLowerCase();
+
+  // ── /comando anzy — lista de comandos (mayúsculas/minúsculas indistinto) ──
+  if (/^\/comando\s+anzy$/i.test(texto)) {
+    const texto_respuesta = esPropietarioEfectivo(jidUsuario) ? TEXTO_AYUDA_PROPIETARIO : TEXTO_AYUDA;
+    await sock.sendMessage(jidGrupo, { text: texto_respuesta });
+    return;
+  }
 
   // ── TIKTOK (video o foto/slideshow) ────────────────────────────────
   if (PATRON_COMANDO_TIKTOK.test(texto)) {
@@ -1082,11 +1129,30 @@ async function procesarMensajeGrupo(sock, msg, identificadoresBot) {
       case '/abrir': await comandoCerrarGrupo(sock, jidGrupo, jidUsuario, false); return;
       case '/eliminar': await comandoEliminarPorCodigo(sock, jidGrupo, jidUsuario, resto[0]); return;
       case '/propietario': {
-        if (esPropietario(jidUsuario)) {
-          await sock.sendMessage(jidGrupo, { text: '👑 Te reconozco como propietaria/o del bot. Puedes agregar o eliminar integrantes del clan en este grupo aunque no seas admin aquí.' });
-        } else {
-          await sock.sendMessage(jidGrupo, { text: 'Este comando es solo para el propietario del bot 🚫' });
+        pendientesPropietario.set(clavePendientePropietario, Date.now());
+        await sock.sendMessage(jidGrupo, { text: '🔐 Escribe la contraseña de propietario para continuar:' });
+        return;
+      }
+      case '/silencio': {
+        if (!(await tienePermisoClan(sock, jidGrupo, jidUsuario))) {
+          await sock.sendMessage(jidGrupo, { text: 'Solo las admins o el propietario pueden usar este comando 🚫' });
+          return;
         }
+        if (!mencionados.length) { await sock.sendMessage(jidGrupo, { text: 'Menciona a quién silenciar: /silencio @usuario' }); return; }
+        mencionados.forEach(j => SILENCIADOS.add(extraerNumero(j)));
+        guardarSilenciados();
+        await sock.sendMessage(jidGrupo, { text: `🔇 Listo, dejé de responderle a ${mencionados.length} usuario(s).` });
+        return;
+      }
+      case '/activarse': {
+        if (!(await tienePermisoClan(sock, jidGrupo, jidUsuario))) {
+          await sock.sendMessage(jidGrupo, { text: 'Solo las admins o el propietario pueden usar este comando 🚫' });
+          return;
+        }
+        if (!mencionados.length) { await sock.sendMessage(jidGrupo, { text: 'Menciona a quién reactivar: /activarse @usuario' }); return; }
+        mencionados.forEach(j => SILENCIADOS.delete(extraerNumero(j)));
+        guardarSilenciados();
+        await sock.sendMessage(jidGrupo, { text: `🔊 Listo, ya vuelvo a responderle a ${mencionados.length} usuario(s).` });
         return;
       }
       case '/novia': {
@@ -1141,7 +1207,6 @@ async function procesarMensajeGrupo(sock, msg, identificadoresBot) {
         return;
       }
       case '/movimiento': case '/movimientos': await comandoMovimientos(sock, jidGrupo, jidUsuario, resto.join(' ')); return;
-      case '/comandos': case '/ayuda': await sock.sendMessage(jidGrupo, { text: TEXTO_AYUDA }); return;
     }
   } catch (err) {
     console.log('❌ Error en comando:', err.message);
@@ -1208,6 +1273,7 @@ function calcularEsperaReconexion(intentos) {
 
 const almacenMensajes = new Map();
 let nubeInicializada = false;
+let IDENTIFICADORES_BOT_CACHE = []; // se calcula una sola vez al conectar, no en cada mensaje
 
 async function iniciarBot() {
   limpiarArchivosTemporalesViejos();
@@ -1241,8 +1307,9 @@ async function iniciarBot() {
     }
     if (connection === 'open') {
       estado.conectado = true; estado.intentosReconexion = 0; estado.ultimoQR = null;
+      IDENTIFICADORES_BOT_CACHE = obtenerIdentificadoresBot(sock); // se calcula UNA vez aquí
       console.log('\n✅ BOT CONECTADO Y LISTO ✅');
-      console.log('🆔 Identificadores del bot detectados:', obtenerIdentificadoresBot(sock));
+      console.log('🆔 Identificadores del bot detectados:', IDENTIFICADORES_BOT_CACHE);
     }
     if (connection === 'close') {
       estado.conectado = false;
@@ -1275,19 +1342,35 @@ async function iniciarBot() {
       if (remitente.endsWith('@s.whatsapp.net')) {
         const textoPersonal = (msg.message.conversation || msg.message.extendedTextMessage?.text || '').trim();
 
+        // ── Contraseña de propietario pendiente (chat personal) ──────────
+        if (pendientesPropietario.has(remitente)) {
+          pendientesPropietario.delete(remitente);
+          if (textoPersonal.trim() === CODIGO_DUEÑO) {
+            propietariosVerificados.add(extraerNumero(remitente));
+            await sock.sendMessage(remitente, { text: '👑 Contraseña correcta. Te reconozco como propietaria/o del bot — ya puedes agregar o eliminar integrantes del clan y silenciar usuarios en cualquier grupo.' });
+          } else {
+            await sock.sendMessage(remitente, { text: '❌ Contraseña incorrecta. Escribe /propietario para intentar de nuevo.' });
+          }
+          return;
+        }
+
+        if (textoPersonal.toLowerCase() === '/propietario') {
+          pendientesPropietario.set(remitente, Date.now());
+          await sock.sendMessage(remitente, { text: '🔐 Escribe la contraseña de propietario para continuar:' });
+          return;
+        }
+
+        if (/^\/comando\s+anzy$/i.test(textoPersonal)) {
+          const texto_respuesta = esPropietarioEfectivo(remitente) ? TEXTO_AYUDA_PROPIETARIO : TEXTO_AYUDA;
+          await sock.sendMessage(remitente, { text: texto_respuesta });
+          return;
+        }
+
         if (esCodigoDueño(textoPersonal)) {
           modoJefe.set(remitente, true);
           await sock.sendMessage(remitente, {
             text: `🔐 Menú principal activado, jefe.\n\nPuedes pedirme:\n• informe — estadísticas del bot\n• apagar / encender — activa o desactiva el bot en los grupos\n• restaura — vuelvo a mi forma de ser original\n• cualquier otra frase — la tomo como tu nueva forma de expresarme en TODOS los grupos\n• salir — cierra este menú`
           });
-          return;
-        }
-        if (textoPersonal.toLowerCase() === '/propietario') {
-          if (esPropietario(remitente)) {
-            await sock.sendMessage(remitente, { text: '👑 Te reconozco como propietaria/o del bot. Puedes agregar o eliminar integrantes del clan en cualquier grupo aunque no seas admin ahí.' });
-          } else {
-            await sock.sendMessage(remitente, { text: 'Este comando es solo para el propietario del bot 🚫' });
-          }
           return;
         }
         if (modoJefe.get(remitente)) {
@@ -1307,8 +1390,7 @@ async function iniciarBot() {
 
     estado.mensajesRecibidos++;
     try {
-      const identificadoresBot = obtenerIdentificadoresBot(sock);
-      await procesarMensajeGrupo(sock, msg, identificadoresBot);
+      await procesarMensajeGrupo(sock, msg, IDENTIFICADORES_BOT_CACHE); // ya no se recalcula por mensaje
       estado.mensajesEnviados++;
     } catch (err) {
       console.log('❌ Error procesando mensaje de grupo:', err.message);
@@ -1350,14 +1432,27 @@ const LISTA_COMANDOS_PANEL = [
     ['/cerrar · /abrir', 'Controla quién escribe'],
     ['/recordatorio <n>S/M/H <texto>', 'Aviso al grupo, ej: 30M'],
     ['/ranking', 'Top de más activas'],
-    ['/movimiento', 'Últimos movimientos de admins 🗂️']
+    ['/movimiento', 'Últimos movimientos de admins 🗂️'],
+    ['/silencio @user', 'El bot deja de responderle por completo'],
+    ['/activarse @user', 'El bot vuelve a responderle']
   ]},
   { cat: '👑 Propietario', items: [
-    ['/propietario', 'Te reconoce por tu número y desbloquea el clan en cualquier grupo']
+    ['/propietario', 'Pide contraseña y te reconoce como propietaria/o (grupo o privado)']
+  ]},
+  { cat: '👥 Clan · registro paso a paso', items: [
+    ['/nombreff <nombre>', 'Guarda el nombre'],
+    ['/numeroff <número>', 'Guarda el número'],
+    ['/idff <ID>', 'Guarda el ID FF'],
+    ['/apodoff <apodo>', 'Guarda el apodo (al completar los 4, se guarda solo)'],
+    ['/clan ver <código o número>', 'Ver una ficha'],
+    ['/clan quitar <código o número>', 'Eliminar una ficha'],
+    ['/eliminar <código de 2 cifras>', 'Elimina a una integrante sin afectar a las demás'],
+    ['/integrantes', 'Lista completa con códigos (admins o propietario)']
   ]},
   { cat: '📋 Info', items: [
     ['/info', 'Info del bot'],
-    ['/creador', 'Quién lo hizo']
+    ['/creador', 'Quién lo hizo'],
+    ['/comando anzy', 'Ver lista de comandos en el chat']
   ]},
   { cat: '🗂️ Memoria personal', items: [
     ['/recordar', 'Ver qué recuerda de ti'],
