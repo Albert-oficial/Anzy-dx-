@@ -1332,17 +1332,7 @@ const LISTA_COMANDOS_PANEL = [
   ]},
   { cat: '👑 Propietario', items: [
     ['/propietario', 'Te reconoce por tu número y desbloquea el clan en cualquier grupo']
-  ]},
-  { cat: '👥 Clan · registro paso a paso', items: [
-    ['/nombreff <nombre>', 'Guarda el nombre'],
-    ['/numeroff <número>', 'Guarda el número'],
-    ['/idff <ID>', 'Guarda el ID FF'],
-    ['/apodoff <apodo>', 'Guarda el apodo (al completar los 4, se guarda solo)'],
-    ['/clan ver <código o número>', 'Ver una ficha'],
-    ['/clan quitar <código o número>', 'Eliminar una ficha'],
-    ['/eliminar <código de 2 cifras>', 'Elimina a una integrante sin afectar a las demás'],
-    ['/integrantes', 'Lista completa con códigos (admins o propietario)']
-  ]},
+  ]}, 
   { cat: '📋 Info', items: [
     ['/info', 'Info del bot'],
     ['/creador', 'Quién lo hizo']
