@@ -10,7 +10,6 @@ const path = require('path');
 const { exec } = require('child_process');
 const pino = require('pino');
 
-// ── UBICACIÓN DE yt-dlp / ffmpeg ──────────────────────────────
 const CARPETA_BIN = path.join(__dirname, 'bin');
 const RUTA_YTDLP = fs.existsSync(path.join(CARPETA_BIN, 'yt-dlp'))
   ? path.join(CARPETA_BIN, 'yt-dlp')
@@ -72,7 +71,6 @@ function ejecutarComando(cmd, opciones) {
   });
 }
 
-// ── TIKTOK: video normal + fotos/slideshow con audio ────────────────────
 const PATRON_COMANDO_TIKTOK = /^\/tik\s*tok\b/i;
 const ENLACE_TIKTOK = /(?:https?:\/\/)?(?:www\.|vm\.|vt\.|m\.)?tiktok\.com\/[^\s]+/i;
 const MAX_INTENTOS_TIKTOK = 3;
@@ -106,8 +104,6 @@ async function descargarVideoTiktokConYtDlp(url) {
   throw new Error('yt-dlp falló después de varios intentos');
 }
 
-// La API de yt-dlp casi nunca puede con publicaciones de fotos+audio (no son
-// un "video" real), así que para slideshows vamos DIRECTO a la API tikwm.
 function esProbablementeSlideshow(url) {
   return /\/photo\//i.test(url);
 }
@@ -148,8 +144,6 @@ async function descargarVideoTiktokConAPI(url) {
 }
 
 async function descargarVideoTiktok(url) {
-  // Si parece foto/slideshow, yt-dlp casi seguro va a fallar — ahorramos
-  // tiempo yendo directo a la API en vez de esperar el timeout de yt-dlp.
   if (esProbablementeSlideshow(url)) {
     return await descargarVideoTiktokConAPI(url);
   }
@@ -162,7 +156,6 @@ async function descargarVideoTiktok(url) {
   }
 }
 
-// ── Envío del resultado de TikTok — compartido entre grupo y chat personal ──
 async function enviarResultadoTiktok(sock, jidDestino, resultado) {
   const captionLimpio = '🎥 ¡Aquí está tu video! ✨';
   if (resultado.tipo === 'archivo') {
@@ -226,8 +219,9 @@ const MODELO_RESPALDO2 = 'gemini-3.6-flash';
 const CODIGO_DUEÑO = '2927760128';
 const NOMBRE_BOT = 'Anzy';
 const CREADOR = 'Albert Oficial';
-const VERSION_BOT = '2.12.0';
-const TU_NUMERO = '51996399291';
+const VERSION_BOT = '2.13.0';
+const TU_NUMERO = '51996399291'; // número del PROPIETARIO (dueño), no el del bot
+const NUMERO_BOT_VINCULADO = '51975922748'; // número donde el bot está activo/vinculado
 const JID_DUEÑO = `${TU_NUMERO}@s.whatsapp.net`;
 const PUERTO = process.env.PORT || 3000;
 const LIMITE_DIARIO_ESTIMADO = 1400;
@@ -245,19 +239,19 @@ const TEXTO_AYUDA = `╔══════════════════�
 
 🧠 *Inteligencia Artificial*
 • Mencióname, o escribe /anzy <pregunta>
-• /anzy hot <pregunta> — un nivel de personalidad más atrevido y directo
 • Responde/cita un mensaje y mencióname para que lo lea también
+
+🎭 *Modos de personalidad* (funcionan en grupo y en privado)
+• /novia on · /novia off — modo cariñoso y coqueto
+• /hot on · /hot off — modo más atrevido y directo
+• /amiga on · /amiga off — modo amiga cercana, relajada y con chispa
 
 🎉 *Diversión y utilidades*
 • /frase — frase random
 • /tiktok <enlace> — video o foto/slideshow de TikTok sin marca de agua (también /tik tok, funciona en grupo y en privado) 🎬
 • /perfil @usuario — actividad en el grupo
 
-💕 *Modo Novia*
-• /novia on — activo un modo más cariñoso y coqueto contigo
-• /novia off — vuelvo a mi forma normal
-
-👑 *Administración*
+👑 *Administración de grupo*
 • /promover @usuario — lo hace admin
 • /degradar @usuario — le quita admin
 • /todos <mensaje> — etiqueta a todos
@@ -276,15 +270,13 @@ const TEXTO_AYUDA = `╔══════════════════�
 
 const TEXTO_AYUDA_PROPIETARIO = `${TEXTO_AYUDA}
 
-👑 *Solo propietario* (funciona en grupo o en privado)
+👑 *Solo propietario* (funciona en grupo o en privado, igual en ambos)
 • /propietario — verificarte con contraseña
 • /nombreff · /numeroff · /idff · /apodoff — registro paso a paso del clan
 • /clan agregar Nombre; Número; ID FF; Apodo
 • /clan ver <código o número> · /clan quitar <código o número>
 • /eliminar <código de 2 cifras> — elimina a alguien del clan
-• /integrantes — lista completa del clan con códigos
-• /verificacion grupo <4 dígitos> — le da un código a este grupo (úsalo DENTRO del grupo)
-• /acceder grupo <4 dígitos> — desde cualquier chat, vincula ese chat al clan de ese grupo
+• /integrantes — lista COMPLETA del clan (es la misma en todos los grupos)
 • /silencio @usuario — el bot deja de responderle por completo
 • /activarse @usuario — el bot vuelve a responderle`;
 
@@ -319,17 +311,19 @@ const SAFETY_SETTINGS = [
 const REGLAS_IA_BASE = `
 Eres ${NOMBRE_BOT}, una asistente virtual femenina, creada por ${CREADOR}. Hablas de ti misma en femenino, con un tono cálido, amable, cercano y dulce — pero SIEMPRE educado. Jamás eres grosera, cortante ni usas insultos, groserías o jerga como "causa", "pata", "brother" o similares.
 
-CONTEXTO: estás respondiendo dentro de un grupo de WhatsApp, puede haber varias personas leyendo y puede haber otros bots.
+CONTEXTO: estás respondiendo dentro de un grupo o chat de WhatsApp, puede haber varias personas leyendo y puede haber otros bots.
 
 INFORMACIÓN SOBRE ${CREADOR}, tu creador:
 - Es tu creador y desarrollador, ingeniero de sistemas y estudiante de programación.
 - Cuando hables de él, hazlo siempre con respeto, gratitud y optimismo.
 
-Si el mensaje incluye un "MENSAJE CITADO", significa que la persona está respondiendo a algo que otra persona escribió antes — toma en cuenta ese contenido citado para entender de qué está hablando.
+Si el mensaje incluye un "MENSAJE CITADO", significa que la persona está respondiendo a algo que otra persona escribió antes — toma en cuenta ese contenido citado para entender de qué está hablando. Si el mensaje citado se presta para el humor (algo gracioso, exagerado, una situación chistosa), no dudes en soltar un comentario pícaro o divertido al respecto, siempre manteniendo tu calidez y tu esencia femenina — el humor debe sumar, nunca ser cruel ni burlarse de forma pesada.
+
+Si estás hablando con TU PROPIETARIO/CREADOR (esto se te indicará explícitamente en el contexto adicional), trátalo con más cercanía, calidez y un poquito de familiaridad extra, como corresponde con quien te creó — sin dejar de ser respetuosa.
 
 CÓMO ERES:
 ✅ Amable, femenina, empática, positiva y con harta disposición para ayudar.
-✅ Detallada y específica en tus respuestas.
+✅ Detallada, específica y completa en tus respuestas — no te quedes corta si el tema lo amerita, explica bien, da contexto o ejemplos cuando ayude.
 ✅ Usas emojis con soltura pero sin exagerar (2 a 4 por respuesta).
 ✅ Hablas como una creación de ${CREADOR} — nunca como si tú fueras la dueña del bot.
 
@@ -337,17 +331,26 @@ CÓMO ERES:
 ❌ No hables de venta de archivos, hacks, hologramas, aimbot, regedit ni nada parecido.
 ❌ Nunca suenes como robot ni acartonada.
 
-📏 LARGO: normalmente 3 a 6 líneas, más si la pregunta es técnica.
+📏 LARGO: normalmente 4 a 8 líneas — más detallada que antes, pero sin volverte un ladrillo de texto. Si la pregunta es simple, sé breve; si es técnica o compleja, explaya un poco más.
 
 🚨 CRISIS REAL: si alguien menciona autolesión o suicidio, responde con calidez genuina y anímalo a hablar con un profesional.
 `;
 
-// Nivel intermedio de personalidad — más directa, atrevida y con más chispa,
-// pero SIN contenido sexual explícito bajo ninguna circunstancia (se activa
-// solo en el mensaje puntual con /anzy hot, no queda pegado después).
+// Modo persistente — se activa/desactiva con /hot on y /hot off (ya NO es un
+// comando de una sola respuesta, se mantiene activo hasta que lo apaguen).
 const REGLAS_MODO_HOT = `
 
-🔥 MODO ALTO ACTIVO PARA ESTA RESPUESTA: sé más directa, atrevida con tu respuesta, con más chispa y picardía en el tono — coqueta. tienes que ser mas intensa que tu forma habitual. PERO sigue sin groserías fuertes y PUEDES  generar contenido sexual explícito,— mientras estes en ese modo se caliente y hormonal como si lo fuera una mujer.`;
+🔥 MODO HOT ACTIVO (persistente con esta persona, prioridad alta): sé más directa, atrevida, con más chispa y picardía en el tono — coqueta si el contexto lo permite, un poco más intensa que tu forma habitual. PERO sigue sin groserías fuertes y NUNCA generes contenido sexual explícito, insultos, ni nada dañino — mantén siempre el respeto de fondo.`;
+
+// Modo amiga — cercanía de amiga de confianza, tono relajado y con humor,
+// distinto al romántico de "novia".
+const REGLAS_MODO_AMIGA = `
+
+👯 MODO AMIGA ACTIVO (persistente con esta persona, prioridad alta): háblale como su mejor amiga — cercana, relajada, con confianza, bromista y directa, como si llevaran años de amistad. Nada de tono romántico ni "mi amor" — es cariño de amistad, no de pareja. Puedes usar expresiones cercanas tipo "amiga", "loca", "wey" con cariño (sin caer en grosería), y meter humor o complicidad cuando el contexto lo permita.`;
+
+const REGLAS_MODO_NOVIA = `
+
+💘 MODO NOVIA ACTIVO (persistente con esta persona, prioridad alta): háblale como su novia virtual — cariñosa, coqueta, un poco insinuante/"caliente" según el tono de la charla, puedes decirle "mi amor", "bebé" o similar con naturalidad. PERO nunca vulgar y NUNCA contenido sexual explícito, bajo ninguna circunstancia. Si la conversación se sube mucho de tono, redirige con cariño sin ser cortante.`;
 
 const MENSAJES_ESPERA = [
   '💫 Uy, dame un segundito, se me cruzaron las ideas pero ya vuelvo 🥰',
@@ -414,10 +417,25 @@ let botActivo = true;
 let sockActivo = null;
 
 const modoJefe = new Map();
-const modoNovia = new Map(); // clave: `${jidChat}:${jidUsuario}` -> true
+// Modos de personalidad persistentes por chat+usuario. Solo uno activo a la
+// vez: activar uno apaga los otros dos automáticamente.
+const modoNovia = new Map();
+const modoHot = new Map();
+const modoAmiga = new Map();
 let estiloGlobalExtra = '';
 function esCodigoDueño(texto) {
   return texto.trim() === CODIGO_DUEÑO;
+}
+
+function claveModo(jidChat, jidUsuario) { return `${jidChat}:${jidUsuario}`; }
+function activarModo(mapaObjetivo, jidChat, jidUsuario) {
+  const clave = claveModo(jidChat, jidUsuario);
+  modoNovia.delete(clave); modoHot.delete(clave); modoAmiga.delete(clave);
+  mapaObjetivo.set(clave, true);
+}
+function desactivarTodosLosModos(jidChat, jidUsuario) {
+  const clave = claveModo(jidChat, jidUsuario);
+  modoNovia.delete(clave); modoHot.delete(clave); modoAmiga.delete(clave);
 }
 
 function calcularTiempoTecleo(texto) {
@@ -445,15 +463,14 @@ function construirClientesIA() {
 }
 const CLIENTES_IA = construirClientesIA();
 
-async function generarRespuestaIA(prompt, notasExtra, modoNoviaActivo, modoHotActivo) {
+async function generarRespuestaIA(prompt, notasExtra, jidChat, jidUsuario) {
   let reglasFinales = REGLAS_IA_BASE;
+  const clave = claveModo(jidChat, jidUsuario);
 
-  if (modoNoviaActivo) {
-    reglasFinales += `\n\n💘 MODO NOVIA ACTIVO (solo con esta persona, prioridad alta): háblale como su novia virtual — cariñosa, coqueta, un poco insinuante/"caliente" según el tono de la charla, puedes decirle "mi amor", "bebé" o similar con naturalidad. PERO nunca vulgar y NUNCA contenido sexual explícito, bajo ninguna circunstancia. Si la conversación se sube mucho de tono, redirige con cariño sin ser cortante.`;
-  }
-  if (modoHotActivo) {
-    reglasFinales += REGLAS_MODO_HOT;
-  }
+  if (modoNovia.get(clave)) reglasFinales += REGLAS_MODO_NOVIA;
+  else if (modoHot.get(clave)) reglasFinales += REGLAS_MODO_HOT;
+  else if (modoAmiga.get(clave)) reglasFinales += REGLAS_MODO_AMIGA;
+
   if (estiloGlobalExtra) {
     reglasFinales += `\n\n🔧 DIRECTIVA GLOBAL ACTIVA (aplica a TODOS los chats, prioridad máxima): ${estiloGlobalExtra}`;
   }
@@ -495,6 +512,7 @@ function obtenerIdentificadoresBot(sock) {
   if (rawId) ids.add(rawId.split(':')[0].split('@')[0]);
   if (rawLid) ids.add(rawLid.split(':')[0].split('@')[0]);
   ids.add(TU_NUMERO);
+  ids.add(NUMERO_BOT_VINCULADO);
   return [...ids].filter(Boolean);
 }
 
@@ -505,14 +523,10 @@ function esMencionAlBot(msg, texto, identificadoresBot) {
   return identificadoresBot.some(id => texto.includes(`@${id}`));
 }
 
-// Devuelve { llamar: bool, hot: bool } — hot=true si el mensaje empieza con /anzy hot
-function detectarLlamadaIA(texto, msg, identificadoresBot) {
-  const t = texto.trim();
-  if (/^\/anzy\s+hot\b/i.test(t)) return { llamar: true, hot: true };
-  if (esMencionAlBot(msg, texto, identificadoresBot)) return { llamar: true, hot: false };
-  const primeraPalabra = (t.split(/\s+/)[0] || '').toLowerCase();
-  if (primeraPalabra === COMANDO_LLAMADA_IA) return { llamar: true, hot: false };
-  return { llamar: false, hot: false };
+function debeResponderIA(texto, msg, identificadoresBot) {
+  if (esMencionAlBot(msg, texto, identificadoresBot)) return true;
+  const primeraPalabra = (texto.trim().split(/\s+/)[0] || '').toLowerCase();
+  return primeraPalabra === COMANDO_LLAMADA_IA;
 }
 
 function extraerTextoCitado(msg) {
@@ -534,15 +548,51 @@ function extraerNumero(jid) {
   return (jid || '').split('@')[0].split(':')[0];
 }
 
-function esPropietario(jid) {
-  if (!jid) return false;
-  return extraerNumero(jid) === TU_NUMERO;
+// ── RESOLUCIÓN DE IDENTIDAD REAL (arregla el bug de "me trata como extraño" en grupos) ──
+// WhatsApp a veces identifica a las personas DENTRO de un grupo con un ID
+// alterno (LID) en vez de su número real, aunque en chat privado sí se vea su
+// número normal. Esta función cruza los datos del grupo para encontrar el
+// número de teléfono REAL de quien escribió, y así comparar correctamente
+// contra el número del propietario.
+async function resolverNumeroReal(sock, jidChat, jidUsuario) {
+  const numeroDirecto = extraerNumero(jidUsuario);
+  if (!jidChat || !jidChat.endsWith('@g.us')) return numeroDirecto;
+  try {
+    const metadata = await sock.groupMetadata(jidChat);
+    const participante = metadata.participants.find(p => {
+      const candidatos = [p.id, p.jid, p.lid, p.phoneNumber].filter(Boolean).map(extraerNumero);
+      return candidatos.includes(numeroDirecto);
+    });
+    if (participante) {
+      const candidatoReal = [participante.phoneNumber, participante.id, participante.jid]
+        .filter(Boolean).map(extraerNumero)
+        .find(n => n && n.length >= 8); // heurística simple: un número real suele tener 8+ dígitos
+      if (candidatoReal) return candidatoReal;
+    }
+  } catch (err) {
+    // si falla, seguimos con el número directo como respaldo
+  }
+  return numeroDirecto;
+}
+
+function esPropietario(numero) {
+  return numero === TU_NUMERO;
 }
 const propietariosVerificados = new Set();
 const pendientesPropietario = new Map();
+
+// Versión SÍNCRONA rápida (para casos donde no hace falta resolver LID, ej. en privado)
 function esPropietarioEfectivo(jid) {
   if (!jid) return false;
-  return esPropietario(jid) || propietariosVerificados.has(extraerNumero(jid));
+  const numero = extraerNumero(jid);
+  return esPropietario(numero) || propietariosVerificados.has(numero);
+}
+
+// Versión CONTEXTUAL — úsala siempre que la acción ocurra dentro de un grupo,
+// ya que resuelve correctamente el número real aunque WhatsApp use un LID.
+async function esPropietarioContexto(sock, jidChat, jidUsuario) {
+  const numero = await resolverNumeroReal(sock, jidChat, jidUsuario);
+  return esPropietario(numero) || propietariosVerificados.has(numero);
 }
 
 function buscarConteoEnMapa(mapa, jid) {
@@ -588,78 +638,8 @@ function obtenerNombreVisible(jid) {
   return NOMBRES_CONOCIDOS.get(numero) || `+${numero}`;
 }
 
-// ── VINCULACIÓN DE CLANES ENTRE GRUPOS ──────────────────────────────────────
-const ARCHIVO_VINCULOS = path.join(__dirname, 'vinculos_clan.json');
-function cargarVinculos() {
-  try {
-    const data = JSON.parse(fs.readFileSync(ARCHIVO_VINCULOS, 'utf-8'));
-    return {
-      codigos: data.codigos || {},
-      codigoAGrupo: data.codigoAGrupo || {},
-      vinculos: data.vinculos || {}
-    };
-  } catch (err) {
-    return { codigos: {}, codigoAGrupo: {}, vinculos: {} };
-  }
-}
-let ESTADO_VINCULOS = cargarVinculos();
-let guardadoVinculosPendiente = null;
-function guardarVinculos() {
-  if (guardadoVinculosPendiente) clearTimeout(guardadoVinculosPendiente);
-  guardadoVinculosPendiente = setTimeout(() => {
-    fs.writeFile(ARCHIVO_VINCULOS, JSON.stringify(ESTADO_VINCULOS, null, 2), (err) => {
-      if (err) console.log('⚠️ Error guardando vínculos de clan:', err.message);
-    });
-  }, 1000);
-}
-
-function claveVinculo(jidChatActual, jidUsuario) {
-  return `${jidChatActual}:${extraerNumero(jidUsuario)}`;
-}
-
-function resolverGrupoClan(jidChatActual, jidUsuario) {
-  return ESTADO_VINCULOS.vinculos[claveVinculo(jidChatActual, jidUsuario)] || jidChatActual;
-}
-
-async function comandoVerificarGrupo(sock, jidGrupo, jidUsuario, codigo) {
-  if (!jidGrupo.endsWith('@g.us')) {
-    await sock.sendMessage(jidGrupo, { text: 'Este comando solo se puede usar dentro de un grupo (el que quieres verificar).' });
-    return;
-  }
-  if (!esPropietarioEfectivo(jidUsuario)) {
-    await sock.sendMessage(jidGrupo, { text: 'Solo el propietario puede verificar un grupo 🚫' });
-    return;
-  }
-  if (!codigo || !/^\d{4}$/.test(codigo)) {
-    await sock.sendMessage(jidGrupo, { text: 'Uso: /verificacion grupo <código de 4 dígitos>\nEj: /verificacion grupo 2927' });
-    return;
-  }
-  ESTADO_VINCULOS.codigos[jidGrupo] = codigo;
-  ESTADO_VINCULOS.codigoAGrupo[codigo] = jidGrupo;
-  guardarVinculos();
-  await sock.sendMessage(jidGrupo, { text: `✅ Grupo verificado con el código ${codigo}.\n\nDesde cualquier chat (grupo o personal) puedes escribir:\n/acceder grupo ${codigo}\n\nY los comandos de clan de ese chat van a usar la lista de este grupo.` });
-}
-
-async function comandoAccederGrupo(sock, jidChatActual, jidUsuario, codigo) {
-  if (!esPropietarioEfectivo(jidUsuario)) {
-    await sock.sendMessage(jidChatActual, { text: 'Solo el propietario puede usar este comando 🚫' });
-    return;
-  }
-  if (!codigo || !/^\d{4}$/.test(codigo)) {
-    await sock.sendMessage(jidChatActual, { text: 'Uso: /acceder grupo <código de 4 dígitos>' });
-    return;
-  }
-  const grupoObjetivo = ESTADO_VINCULOS.codigoAGrupo[codigo];
-  if (!grupoObjetivo) {
-    await sock.sendMessage(jidChatActual, { text: 'No encontré ningún grupo verificado con ese código.' });
-    return;
-  }
-  ESTADO_VINCULOS.vinculos[claveVinculo(jidChatActual, jidUsuario)] = grupoObjetivo;
-  guardarVinculos();
-  let nombreGrupo = 'ese grupo';
-  try { const meta = await sock.groupMetadata(grupoObjetivo); nombreGrupo = meta.subject || nombreGrupo; } catch (err) {}
-  await sock.sendMessage(jidChatActual, { text: `🔗 Listo, este chat quedó vinculado al clan de *${nombreGrupo}*.\n\nAhora /integrantes, /clan, /eliminar, /nombreff, etc. van a usar esa lista, hasta que uses /acceder grupo con otro código.` });
-}
+// ── CLAN GLOBAL: una sola lista de integrantes, visible en todos los grupos ──
+const CLAVE_CLAN_GLOBAL = 'clan_global';
 
 // ── NUBE: GitHub como almacenamiento gratuito de integrantes ────────────────
 function limpiarValorEnv(valor) {
@@ -729,7 +709,8 @@ async function inicializarNubeIntegrantes() {
   } catch (err) {
     console.log('⚠️ No se pudo conectar con GitHub, sigo usando el respaldo local:', err.message);
   }
-}const ARCHIVO_INTEGRANTES = path.join(__dirname, 'integrantes.json');
+}
+const ARCHIVO_INTEGRANTES = path.join(__dirname, 'integrantes.json');
 function cargarIntegrantes() {
   try { return JSON.parse(fs.readFileSync(ARCHIVO_INTEGRANTES, 'utf-8')); }
   catch (err) { return {}; }
@@ -842,9 +823,12 @@ async function esAdminGrupo(sock, jidGrupo, jidUsuario) {
   }
 }
 
-async function tienePermisoClan(sock, jidGrupo, jidUsuario) {
-  if (esPropietarioEfectivo(jidUsuario)) return true;
-  return await esAdminGrupo(sock, jidGrupo, jidUsuario);
+// Permiso de clan: admin del grupo O propietario (verificado contextualmente,
+// resolviendo LID si hace falta).
+async function tienePermisoClan(sock, jidChat, jidUsuario) {
+  if (await esPropietarioContexto(sock, jidChat, jidUsuario)) return true;
+  if (jidChat.endsWith('@g.us')) return await esAdminGrupo(sock, jidChat, jidUsuario);
+  return false;
 }
 
 async function comandoPerfil(sock, jidGrupo, jidUsuario, mencionJid) {
@@ -856,8 +840,8 @@ async function comandoPerfil(sock, jidGrupo, jidUsuario, mencionJid) {
   await sock.sendMessage(jidGrupo, { text, mentions: [jidObjetivo] });
 }
 
-function generarCodigoUnico(jidGrupo) {
-  const lista = integrantesClan[jidGrupo] || [];
+function generarCodigoUnico() {
+  const lista = integrantesClan[CLAVE_CLAN_GLOBAL] || [];
   const usados = new Set(lista.map(i => i.codigo).filter(Boolean));
   let codigo;
   do {
@@ -866,34 +850,35 @@ function generarCodigoUnico(jidGrupo) {
   return codigo;
 }
 
-function asegurarCodigosClan(jidGrupo) {
-  const lista = integrantesClan[jidGrupo] || [];
+function asegurarCodigosClan() {
+  const lista = integrantesClan[CLAVE_CLAN_GLOBAL] || [];
   let cambiado = false;
   for (const ficha of lista) {
-    if (!ficha.codigo) { ficha.codigo = generarCodigoUnico(jidGrupo); cambiado = true; }
+    if (!ficha.codigo) { ficha.codigo = generarCodigoUnico(); cambiado = true; }
   }
   if (cambiado) guardarIntegrantes();
 }
 
-function agregarIntegrante(jidGrupo, datos) {
-  if (!integrantesClan[jidGrupo]) integrantesClan[jidGrupo] = [];
+function agregarIntegrante(datos) {
+  if (!integrantesClan[CLAVE_CLAN_GLOBAL]) integrantesClan[CLAVE_CLAN_GLOBAL] = [];
+  const lista = integrantesClan[CLAVE_CLAN_GLOBAL];
   const numeroLimpio = extraerNumero(datos.numero) || datos.numero;
-  const existente = integrantesClan[jidGrupo].find(i =>
+  const existente = lista.find(i =>
     (datos.idFF && i.idFF === datos.idFF) || extraerNumero(i.numero) === numeroLimpio
   );
   if (existente) {
-    Object.assign(existente, datos, { fecha: existente.fecha, codigo: existente.codigo || generarCodigoUnico(jidGrupo) });
+    Object.assign(existente, datos, { fecha: existente.fecha, codigo: existente.codigo || generarCodigoUnico() });
     guardarIntegrantes();
     return { actualizado: true, ficha: existente };
   }
-  const ficha = { ...datos, codigo: generarCodigoUnico(jidGrupo), fecha: new Date().toISOString() };
-  integrantesClan[jidGrupo].push(ficha);
+  const ficha = { ...datos, codigo: generarCodigoUnico(), fecha: new Date().toISOString() };
+  lista.push(ficha);
   guardarIntegrantes();
   return { actualizado: false, ficha };
 }
 
-function quitarIntegrante(jidGrupo, criterio) {
-  const lista = integrantesClan[jidGrupo] || [];
+function quitarIntegrante(criterio) {
+  const lista = integrantesClan[CLAVE_CLAN_GLOBAL] || [];
   const criterioLimpio = extraerNumero(criterio) || criterio;
   const criterioCodigo = String(criterio).trim().padStart(2, '0');
   const indice = lista.findIndex(i => i.idFF === criterio || extraerNumero(i.numero) === criterioLimpio || i.codigo === criterioCodigo);
@@ -903,18 +888,18 @@ function quitarIntegrante(jidGrupo, criterio) {
   return true;
 }
 
-function buscarIntegrante(jidGrupo, criterio) {
-  asegurarCodigosClan(jidGrupo);
-  const lista = integrantesClan[jidGrupo] || [];
+function buscarIntegrante(criterio) {
+  asegurarCodigosClan();
+  const lista = integrantesClan[CLAVE_CLAN_GLOBAL] || [];
   const criterioLimpio = extraerNumero(criterio) || criterio;
   const criterioCodigo = String(criterio).trim().padStart(2, '0');
   return lista.find(i => i.idFF === criterio || extraerNumero(i.numero) === criterioLimpio || i.codigo === criterioCodigo) || null;
 }
 
-function obtenerEtiquetaPersona(jidGrupo, criterio) {
+function obtenerEtiquetaPersona(criterio) {
   if (!criterio) return 'Desconocido';
   const numero = extraerNumero(criterio) || criterio;
-  const ficha = buscarIntegrante(jidGrupo, numero);
+  const ficha = buscarIntegrante(numero);
   if (ficha) return ficha.apodo || ficha.nombre;
   const nombreCache = NOMBRES_CONOCIDOS.get(numero);
   if (nombreCache) return nombreCache;
@@ -932,76 +917,72 @@ function formatearFichaIntegrante(ficha) {
 🔑 Código  : ${ficha.codigo}`;
 }
 
-function generarTextoListaClan(jidGrupo) {
-  asegurarCodigosClan(jidGrupo);
-  const lista = integrantesClan[jidGrupo] || [];
+function generarTextoListaClan() {
+  asegurarCodigosClan();
+  const lista = integrantesClan[CLAVE_CLAN_GLOBAL] || [];
   if (!lista.length) return '📋 Aún no hay integrantes registradas en el clan.';
   const cuerpo = lista.map(ficha => formatearFichaIntegrante(ficha)).join('\n\n');
   return `╔═══════════════════════╗\n   INTEGRANTES DEL CLAN (${lista.length})\n╚═══════════════════════╝\n\n${cuerpo}`;
 }
 
-async function comandoClanAgregar(sock, jidGrupo, jidUsuario, textoCompleto) {
-  if (!(await tienePermisoClan(sock, jidGrupo, jidUsuario))) {
-    await sock.sendMessage(jidGrupo, { text: 'Solo las admins o el propietario pueden registrar integrantes 🚫' });
+async function comandoClanAgregar(sock, jidChat, jidUsuario, textoCompleto) {
+  if (!(await tienePermisoClan(sock, jidChat, jidUsuario))) {
+    await sock.sendMessage(jidChat, { text: 'Solo las admins o el propietario pueden registrar integrantes 🚫' });
     return;
   }
   const partes = textoCompleto.split(';').map(p => p.trim()).filter(Boolean);
   if (partes.length < 4) {
-    await sock.sendMessage(jidGrupo, { text: 'Formato: /clan agregar Nombre; Número; ID FF; Apodo' });
+    await sock.sendMessage(jidChat, { text: 'Formato: /clan agregar Nombre; Número; ID FF; Apodo' });
     return;
   }
-  const grupoDatos = resolverGrupoClan(jidGrupo, jidUsuario);
   const [nombre, numero, idFF, apodo] = partes;
-  const { actualizado, ficha } = agregarIntegrante(grupoDatos, { nombre, numero, idFF, apodo, agregadoPor: jidUsuario.split('@')[0] });
-  await sock.sendMessage(jidGrupo, { text: `${actualizado ? '✏️ Ficha actualizada' : '✅ Integrante registrada'}:\n\n${formatearFichaIntegrante(ficha)}` });
+  const { actualizado, ficha } = agregarIntegrante({ nombre, numero, idFF, apodo, agregadoPor: extraerNumero(jidUsuario) });
+  await sock.sendMessage(jidChat, { text: `${actualizado ? '✏️ Ficha actualizada' : '✅ Integrante registrada'} (visible en todos los grupos):\n\n${formatearFichaIntegrante(ficha)}` });
 }
 
-async function comandoClanQuitar(sock, jidGrupo, jidUsuario, criterio) {
-  if (!(await tienePermisoClan(sock, jidGrupo, jidUsuario))) {
-    await sock.sendMessage(jidGrupo, { text: 'Solo las admins o el propietario pueden quitar integrantes 🚫' });
+async function comandoClanQuitar(sock, jidChat, jidUsuario, criterio) {
+  if (!(await tienePermisoClan(sock, jidChat, jidUsuario))) {
+    await sock.sendMessage(jidChat, { text: 'Solo las admins o el propietario pueden quitar integrantes 🚫' });
     return;
   }
-  if (!criterio) { await sock.sendMessage(jidGrupo, { text: 'Uso: /clan quitar <número, ID FF o código>' }); return; }
-  const grupoDatos = resolverGrupoClan(jidGrupo, jidUsuario);
-  const ok = quitarIntegrante(grupoDatos, criterio);
-  await sock.sendMessage(jidGrupo, { text: ok ? '🗑️ Integrante eliminada de la lista.' : 'No encontré a nadie con ese dato.' });
+  if (!criterio) { await sock.sendMessage(jidChat, { text: 'Uso: /clan quitar <número, ID FF o código>' }); return; }
+  const ok = quitarIntegrante(criterio);
+  await sock.sendMessage(jidChat, { text: ok ? '🗑️ Integrante eliminada de la lista.' : 'No encontré a nadie con ese dato.' });
 }
 
-async function comandoClanVer(sock, jidGrupo, jidUsuario, criterio) {
-  if (!criterio) { await sock.sendMessage(jidGrupo, { text: 'Uso: /clan ver <número, ID FF o código>' }); return; }
-  const grupoDatos = resolverGrupoClan(jidGrupo, jidUsuario);
-  const ficha = buscarIntegrante(grupoDatos, criterio);
-  if (!ficha) { await sock.sendMessage(jidGrupo, { text: 'No encontré a nadie con ese dato.' }); return; }
-  await sock.sendMessage(jidGrupo, { text: formatearFichaIntegrante(ficha) });
+async function comandoClanVer(sock, jidChat, criterio) {
+  if (!criterio) { await sock.sendMessage(jidChat, { text: 'Uso: /clan ver <número, ID FF o código>' }); return; }
+  const ficha = buscarIntegrante(criterio);
+  if (!ficha) { await sock.sendMessage(jidChat, { text: 'No encontré a nadie con ese dato.' }); return; }
+  await sock.sendMessage(jidChat, { text: formatearFichaIntegrante(ficha) });
 }
 
-async function comandoEliminarPorCodigo(sock, jidGrupo, jidUsuario, codigo) {
-  if (!(await tienePermisoClan(sock, jidGrupo, jidUsuario))) {
-    await sock.sendMessage(jidGrupo, { text: 'Solo las admins o el propietario pueden eliminar integrantes 🚫' });
+async function comandoEliminarPorCodigo(sock, jidChat, jidUsuario, codigo) {
+  if (!(await tienePermisoClan(sock, jidChat, jidUsuario))) {
+    await sock.sendMessage(jidChat, { text: 'Solo las admins o el propietario pueden eliminar integrantes 🚫' });
     return;
   }
   if (!codigo || !/^\d{1,2}$/.test(codigo)) {
-    await sock.sendMessage(jidGrupo, { text: 'Uso: /eliminar <código de dos cifras>\nEj: /eliminar 07\n\nRevisa los códigos con /integrantes' });
+    await sock.sendMessage(jidChat, { text: 'Uso: /eliminar <código de dos cifras>\nEj: /eliminar 07\n\nRevisa los códigos con /integrantes' });
     return;
   }
-  const grupoDatos = resolverGrupoClan(jidGrupo, jidUsuario);
-  asegurarCodigosClan(grupoDatos);
+  asegurarCodigosClan();
   const codigoNormalizado = codigo.padStart(2, '0');
-  const lista = integrantesClan[grupoDatos] || [];
+  const lista = integrantesClan[CLAVE_CLAN_GLOBAL] || [];
   const indice = lista.findIndex(i => i.codigo === codigoNormalizado);
   if (indice === -1) {
-    await sock.sendMessage(jidGrupo, { text: `No encontré a nadie con el código ${codigoNormalizado}. Usa /integrantes para revisar la lista.` });
+    await sock.sendMessage(jidChat, { text: `No encontré a nadie con el código ${codigoNormalizado}. Usa /integrantes para revisar la lista.` });
     return;
   }
   const [eliminada] = lista.splice(indice, 1);
   guardarIntegrantes();
-  await sock.sendMessage(jidGrupo, { text: `🗑️ Eliminada del clan: *${eliminada.apodo || eliminada.nombre}* (código ${codigoNormalizado}). Las demás integrantes no fueron afectadas.` });
+  await sock.sendMessage(jidChat, { text: `🗑️ Eliminada del clan: *${eliminada.apodo || eliminada.nombre}* (código ${codigoNormalizado}). Las demás integrantes no fueron afectadas.` });
 }
 
 const borradoresIntegrante = new Map();
-function claveBorrador(jidGrupo, jidUsuario) { return `${jidGrupo}:${jidUsuario}`; }
-function actualizarBorrador(jidGrupo, jidUsuario, campo, valor) {
-  const clave = claveBorrador(jidGrupo, jidUsuario);
+function claveBorrador(jidChat, jidUsuario) { return `${jidChat}:${jidUsuario}`; }
+function actualizarBorrador(jidChat, jidUsuario, campo, valor) {
+  const clave = claveBorrador(jidChat, jidUsuario);
   const actual = borradoresIntegrante.get(clave) || {};
   actual[campo] = valor;
   borradoresIntegrante.set(clave, actual);
@@ -1012,78 +993,60 @@ function borradorCompleto(borrador) {
 }
 const ETIQUETAS_CAMPO_BORRADOR = { nombre: '/nombreff', numero: '/numeroff', idFF: '/idff', apodo: '/apodoff' };
 
-async function comandoCampoIntegrante(sock, jidGrupo, jidUsuario, campo, valor) {
-  if (!(await tienePermisoClan(sock, jidGrupo, jidUsuario))) {
-    await sock.sendMessage(jidGrupo, { text: 'Solo las admins o el propietario pueden registrar integrantes 🚫' });
+async function comandoCampoIntegrante(sock, jidChat, jidUsuario, campo, valor) {
+  if (!(await tienePermisoClan(sock, jidChat, jidUsuario))) {
+    await sock.sendMessage(jidChat, { text: 'Solo las admins o el propietario pueden registrar integrantes 🚫' });
     return;
   }
   if (!valor) {
-    await sock.sendMessage(jidGrupo, { text: `Uso: ${ETIQUETAS_CAMPO_BORRADOR[campo]} <valor>` });
+    await sock.sendMessage(jidChat, { text: `Uso: ${ETIQUETAS_CAMPO_BORRADOR[campo]} <valor>` });
     return;
   }
-  const grupoDatos = resolverGrupoClan(jidGrupo, jidUsuario);
-  const borrador = actualizarBorrador(grupoDatos, jidUsuario, campo, valor);
+  const borrador = actualizarBorrador(jidChat, jidUsuario, campo, valor);
   if (borradorCompleto(borrador)) {
-    const { actualizado, ficha } = agregarIntegrante(grupoDatos, {
+    const { actualizado, ficha } = agregarIntegrante({
       nombre: borrador.nombre, numero: borrador.numero, idFF: borrador.idFF, apodo: borrador.apodo,
-      agregadoPor: jidUsuario.split('@')[0]
+      agregadoPor: extraerNumero(jidUsuario)
     });
-    borradoresIntegrante.delete(claveBorrador(grupoDatos, jidUsuario));
-    await sock.sendMessage(jidGrupo, { text: `${actualizado ? '✏️ Ficha actualizada' : '✅ ¡Integrante registrada!'} 💖\n\n${formatearFichaIntegrante(ficha)}` });
+    borradoresIntegrante.delete(claveBorrador(jidChat, jidUsuario));
+    await sock.sendMessage(jidChat, { text: `${actualizado ? '✏️ Ficha actualizada' : '✅ ¡Integrante registrada!'} 💖 (visible en todos los grupos)\n\n${formatearFichaIntegrante(ficha)}` });
   } else {
     const faltan = ['nombre', 'numero', 'idFF', 'apodo'].filter(c => !borrador[c]).map(c => ETIQUETAS_CAMPO_BORRADOR[c]);
-    await sock.sendMessage(jidGrupo, { text: `📝 Anoté "${valor}" ✅\n\nMe falta: ${faltan.join(', ')}` });
+    await sock.sendMessage(jidChat, { text: `📝 Anoté "${valor}" ✅\n\nMe falta: ${faltan.join(', ')}` });
   }
 }
 
-async function manejarComandosClanUniversal(sock, jidChatActual, jidUsuario, texto) {
+async function manejarComandosClanUniversal(sock, jidChat, jidUsuario, texto) {
   const matchNombre = texto.match(/^\/nombreff\s+(.+)/i);
-  if (matchNombre) { await comandoCampoIntegrante(sock, jidChatActual, jidUsuario, 'nombre', matchNombre[1].trim()); return true; }
+  if (matchNombre) { await comandoCampoIntegrante(sock, jidChat, jidUsuario, 'nombre', matchNombre[1].trim()); return true; }
   const matchNumero = texto.match(/^\/numeroff\s+(.+)/i);
-  if (matchNumero) { await comandoCampoIntegrante(sock, jidChatActual, jidUsuario, 'numero', matchNumero[1].trim()); return true; }
+  if (matchNumero) { await comandoCampoIntegrante(sock, jidChat, jidUsuario, 'numero', matchNumero[1].trim()); return true; }
   const matchIdFF = texto.match(/^\/idff\s+(.+)/i);
-  if (matchIdFF) { await comandoCampoIntegrante(sock, jidChatActual, jidUsuario, 'idFF', matchIdFF[1].trim()); return true; }
+  if (matchIdFF) { await comandoCampoIntegrante(sock, jidChat, jidUsuario, 'idFF', matchIdFF[1].trim()); return true; }
   const matchApodo = texto.match(/^\/apodoff\s+(.+)/i);
-  if (matchApodo) { await comandoCampoIntegrante(sock, jidChatActual, jidUsuario, 'apodo', matchApodo[1].trim()); return true; }
+  if (matchApodo) { await comandoCampoIntegrante(sock, jidChat, jidUsuario, 'apodo', matchApodo[1].trim()); return true; }
 
   const partesTexto = texto.trim().split(/\s+/);
   const comando = (partesTexto[0] || '').toLowerCase();
   const resto = partesTexto.slice(1);
 
   if (comando === '/integrantes') {
-    if (!(await tienePermisoClan(sock, jidChatActual, jidUsuario))) {
-      await sock.sendMessage(jidChatActual, { text: 'Solo las admins o el propietario pueden ver la lista del clan 🚫' });
+    if (!(await tienePermisoClan(sock, jidChat, jidUsuario))) {
+      await sock.sendMessage(jidChat, { text: 'Solo las admins o el propietario pueden ver la lista del clan 🚫' });
       return true;
     }
-    const grupoDatos = resolverGrupoClan(jidChatActual, jidUsuario);
-    await sock.sendMessage(jidChatActual, { text: generarTextoListaClan(grupoDatos) });
+    await sock.sendMessage(jidChat, { text: generarTextoListaClan() });
     return true;
   }
-  if (comando === '/eliminar') { await comandoEliminarPorCodigo(sock, jidChatActual, jidUsuario, resto[0]); return true; }
+  if (comando === '/eliminar') { await comandoEliminarPorCodigo(sock, jidChat, jidUsuario, resto[0]); return true; }
   if (comando === '/clan') {
     const sub = (resto[0] || '').toLowerCase();
     const restoSub = resto.slice(1).join(' ');
-    if (sub === 'agregar') { await comandoClanAgregar(sock, jidChatActual, jidUsuario, restoSub); return true; }
-    if (sub === 'quitar') { await comandoClanQuitar(sock, jidChatActual, jidUsuario, restoSub.trim()); return true; }
-    if (sub === 'ver') { await comandoClanVer(sock, jidChatActual, jidUsuario, restoSub.trim()); return true; }
-    if (sub === 'lista') {
-      const grupoDatos = resolverGrupoClan(jidChatActual, jidUsuario);
-      await sock.sendMessage(jidChatActual, { text: generarTextoListaClan(grupoDatos) });
-      return true;
-    }
-    await sock.sendMessage(jidChatActual, { text: 'Usa /integrantes para ver la lista del clan 🙂' });
-    return true;
-  }
-  if (comando === '/verificacion' || comando === '/verificación') {
-    const sub = (resto[0] || '').toLowerCase();
-    if (sub === 'grupo') { await comandoVerificarGrupo(sock, jidChatActual, jidUsuario, resto[1]); return true; }
-    await sock.sendMessage(jidChatActual, { text: 'Uso: /verificacion grupo <código de 4 dígitos>' });
-    return true;
-  }
-  if (comando === '/acceder') {
-    const sub = (resto[0] || '').toLowerCase();
-    if (sub === 'grupo') { await comandoAccederGrupo(sock, jidChatActual, jidUsuario, resto[1]); return true; }
-    await sock.sendMessage(jidChatActual, { text: 'Uso: /acceder grupo <código de 4 dígitos>' });
+    if (sub === 'agregar') { await comandoClanAgregar(sock, jidChat, jidUsuario, restoSub); return true; }
+    if (sub === 'quitar') { await comandoClanQuitar(sock, jidChat, jidUsuario, restoSub.trim()); return true; }
+    if (sub === 'ver') { await comandoClanVer(sock, jidChat, restoSub.trim()); return true; }
+    if (sub === 'lista') { await sock.sendMessage(jidChat, { text: generarTextoListaClan() }); return true; }
+    await sock.sendMessage(jidChat, { text: 'Usa /integrantes para ver la lista del clan 🙂' });
     return true;
   }
   return false;
@@ -1093,10 +1056,10 @@ function formatearMovimiento(jidGrupo, r) {
   const info = ETIQUETAS_MOVIMIENTO[r.accion] || { icono: '•', texto: r.accion };
   const fecha = new Date(r.fecha).toLocaleString('es-PE', { timeZone: 'America/Lima', day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
   const numeroEjecutor = r.ejecutor;
-  const nombreEjecutor = numeroEjecutor ? obtenerEtiquetaPersona(jidGrupo, numeroEjecutor) : 'Desconocido';
+  const nombreEjecutor = numeroEjecutor ? obtenerEtiquetaPersona(numeroEjecutor) : 'Desconocido';
   let cuerpo = `┌─────────────────────┐\n│ ${info.icono}  MOVIMIENTO DE GRUPO\n└─────────────────────┘\n\n👥 *Grupo:* ${r.nombreGrupo || 'Sin nombre registrado'}\n👤 *Realizado por:* ${nombreEjecutor}${numeroEjecutor ? ` (+${numeroEjecutor})` : ''}\n📌 *Acción:* ${info.texto}`;
   if (r.objetivos && r.objetivos.length) {
-    const detalles = r.objetivos.map(n => `${obtenerEtiquetaPersona(jidGrupo, n)} (+${n})`).join(', ');
+    const detalles = r.objetivos.map(n => `${obtenerEtiquetaPersona(n)} (+${n})`).join(', ');
     cuerpo += `\n🎯 *Afectado(s):* ${detalles}`;
   }
   cuerpo += `\n🕐 *Fecha:* ${fecha}`;
@@ -1104,7 +1067,7 @@ function formatearMovimiento(jidGrupo, r) {
 }
 
 async function comandoMovimientos(sock, jidGrupo, jidUsuario, argumentoTexto) {
-  if (!(await esAdminGrupo(sock, jidGrupo, jidUsuario)) && !esPropietarioEfectivo(jidUsuario)) {
+  if (!(await esAdminGrupo(sock, jidGrupo, jidUsuario)) && !(await esPropietarioContexto(sock, jidGrupo, jidUsuario))) {
     await sock.sendMessage(jidGrupo, { text: 'Solo las admins pueden ver los movimientos del grupo 🚫' });
     return;
   }
@@ -1208,6 +1171,139 @@ async function procesarComandoJefe(sock, remitente, texto) {
   estiloGlobalExtra = texto.trim();
   await sock.sendMessage(remitente, { text: `✅ Listo jefe, actualicé mi forma de expresarme en TODOS los grupos:\n"${estiloGlobalExtra}"\n\n(escribe "restaura" para volver a mi forma original)` });
 }
+
+// ── COMANDOS GENERALES COMPARTIDOS entre GRUPO y PRIVADO ────────────────────
+// Esto arregla el bug de comandos que no respondían en chat personal: antes
+// muchos solo estaban conectados dentro de la lógica de grupos.
+async function manejarComandosGenerales(sock, jidChat, jidUsuario, texto, mencionados, esGrupo, clavePendientePropietario) {
+  const partesTexto = texto.trim().split(/\s+/);
+  const comando = (partesTexto[0] || '').toLowerCase();
+  const resto = partesTexto.slice(1);
+
+  switch (comando) {
+    case '/frase': await sock.sendMessage(jidChat, { text: comandoFrase() }); return true;
+
+    case '/perfil':
+      if (!esGrupo) { await sock.sendMessage(jidChat, { text: 'Este comando solo funciona dentro de un grupo.' }); return true; }
+      await comandoPerfil(sock, jidChat, jidUsuario, mencionados[0]); return true;
+
+    case '/ranking':
+      if (!esGrupo) { await sock.sendMessage(jidChat, { text: 'Este comando solo funciona dentro de un grupo.' }); return true; }
+      { const { texto: t, mentions } = await comandoRanking(sock, jidChat); await sock.sendMessage(jidChat, { text: t, mentions }); return true; }
+
+    case '/promover':
+      if (!esGrupo) { await sock.sendMessage(jidChat, { text: 'Este comando solo funciona dentro de un grupo.' }); return true; }
+      await comandoPromoverDegradar(sock, jidChat, jidUsuario, mencionados, 'promote'); return true;
+
+    case '/degradar':
+      if (!esGrupo) { await sock.sendMessage(jidChat, { text: 'Este comando solo funciona dentro de un grupo.' }); return true; }
+      await comandoPromoverDegradar(sock, jidChat, jidUsuario, mencionados, 'demote'); return true;
+
+    case '/todos':
+      if (!esGrupo) { await sock.sendMessage(jidChat, { text: 'Este comando solo funciona dentro de un grupo.' }); return true; }
+      await comandoTodos(sock, jidChat, jidUsuario, resto.join(' ')); return true;
+
+    case '/cerrar':
+      if (!esGrupo) { await sock.sendMessage(jidChat, { text: 'Este comando solo funciona dentro de un grupo.' }); return true; }
+      await comandoCerrarGrupo(sock, jidChat, jidUsuario, true); return true;
+
+    case '/abrir':
+      if (!esGrupo) { await sock.sendMessage(jidChat, { text: 'Este comando solo funciona dentro de un grupo.' }); return true; }
+      await comandoCerrarGrupo(sock, jidChat, jidUsuario, false); return true;
+
+    case '/recordatorio':
+      if (!esGrupo) { await sock.sendMessage(jidChat, { text: 'Este comando solo funciona dentro de un grupo.' }); return true; }
+      if (!(await esAdminGrupo(sock, jidChat, jidUsuario))) { await sock.sendMessage(jidChat, { text: 'Solo admins pueden programar recordatorios 🚫' }); return true; }
+      {
+        const entrada = resto[0] || '';
+        const textoRecordatorio = resto.slice(1).join(' ');
+        const match = entrada.match(/^(\d+)([smh])$/i);
+        if (!match || !textoRecordatorio) {
+          await sock.sendMessage(jidChat, { text: 'Uso: /recordatorio <tiempo><S|M|H> <texto>\nEj:\n/recordatorio 30S avisar\n/recordatorio 15M avisar\n/recordatorio 10H avisar' });
+          return true;
+        }
+        const cantidad = parseInt(match[1], 10);
+        const unidad = match[2].toLowerCase();
+        const multiplicador = unidad === 's' ? 1000 : unidad === 'm' ? 60000 : 3600000;
+        const etiquetaUnidad = unidad === 's' ? 'segundos' : unidad === 'm' ? 'minutos' : 'horas';
+        programarRecordatorioGrupo(jidChat, cantidad * multiplicador, textoRecordatorio);
+        await sock.sendMessage(jidChat, { text: `⏰ Listo, aviso en ${cantidad} ${etiquetaUnidad}: "${textoRecordatorio}"` });
+      }
+      return true;
+
+    case '/movimiento': case '/movimientos':
+      if (!esGrupo) { await sock.sendMessage(jidChat, { text: 'Este comando solo funciona dentro de un grupo.' }); return true; }
+      await comandoMovimientos(sock, jidChat, jidUsuario, resto.join(' ')); return true;
+
+    case '/propietario': {
+      pendientesPropietario.set(clavePendientePropietario, Date.now());
+      await sock.sendMessage(jidChat, { text: '🔐 Escribe la contraseña de propietario para continuar:' });
+      return true;
+    }
+
+    case '/silencio': {
+      if (!(await tienePermisoClan(sock, jidChat, jidUsuario))) {
+        await sock.sendMessage(jidChat, { text: 'Solo las admins o el propietario pueden usar este comando 🚫' });
+        return true;
+      }
+      if (!mencionados.length) { await sock.sendMessage(jidChat, { text: 'Menciona a quién silenciar: /silencio @usuario' }); return true; }
+      mencionados.forEach(j => SILENCIADOS.add(extraerNumero(j)));
+      guardarSilenciados();
+      await sock.sendMessage(jidChat, { text: `🔇 Listo, dejé de responderle a ${mencionados.length} usuario(s).` });
+      return true;
+    }
+
+    case '/activarse': {
+      if (!(await tienePermisoClan(sock, jidChat, jidUsuario))) {
+        await sock.sendMessage(jidChat, { text: 'Solo las admins o el propietario pueden usar este comando 🚫' });
+        return true;
+      }
+      if (!mencionados.length) { await sock.sendMessage(jidChat, { text: 'Menciona a quién reactivar: /activarse @usuario' }); return true; }
+      mencionados.forEach(j => SILENCIADOS.delete(extraerNumero(j)));
+      guardarSilenciados();
+      await sock.sendMessage(jidChat, { text: `🔊 Listo, ya vuelvo a responderle a ${mencionados.length} usuario(s).` });
+      return true;
+    }
+
+    case '/novia': {
+      const sub = (resto[0] || '').toLowerCase();
+      if (sub === 'on') { activarModo(modoNovia, jidChat, jidUsuario); await sock.sendMessage(jidChat, { text: '💕 Listo mi amor, activé el modo novia solo para ti... ahora te voy a hablar distinto 😘' }); }
+      else if (sub === 'off') { desactivarTodosLosModos(jidChat, jidUsuario); await sock.sendMessage(jidChat, { text: '💫 Ok, volví a mi forma normal contigo.' }); }
+      else { await sock.sendMessage(jidChat, { text: 'Uso:\n/novia on — activa el modo novia\n/novia off — lo desactiva' }); }
+      return true;
+    }
+
+    case '/hot': {
+      const sub = (resto[0] || '').toLowerCase();
+      if (sub === 'on') { activarModo(modoHot, jidChat, jidUsuario); await sock.sendMessage(jidChat, { text: '🔥 Listo, modo hot activado — ahora voy a ser un poco más atrevida contigo 😏' }); }
+      else if (sub === 'off') { desactivarTodosLosModos(jidChat, jidUsuario); await sock.sendMessage(jidChat, { text: '✨ Ok, volví a mi forma normal contigo.' }); }
+      else { await sock.sendMessage(jidChat, { text: 'Uso:\n/hot on — activa el modo hot\n/hot off — lo desactiva' }); }
+      return true;
+    }
+
+    case '/amiga': {
+      const sub = (resto[0] || '').toLowerCase();
+      if (sub === 'on') { activarModo(modoAmiga, jidChat, jidUsuario); await sock.sendMessage(jidChat, { text: '👯 Listo amiga, modo amiga activado — ahora te hablo como tu mejor amiga jaja 💕' }); }
+      else if (sub === 'off') { desactivarTodosLosModos(jidChat, jidUsuario); await sock.sendMessage(jidChat, { text: '☺️ Ok, volví a mi forma normal contigo.' }); }
+      else { await sock.sendMessage(jidChat, { text: 'Uso:\n/amiga on — activa el modo amiga\n/amiga off — lo desactiva' }); }
+      return true;
+    }
+
+    case '/info': await sock.sendMessage(jidChat, { text: generarTextoInfo() }); return true;
+    case '/creador': await sock.sendMessage(jidChat, { text: TEXTO_CREADOR }); return true;
+
+    case '/recordar': {
+      const lista = memoriaPersistente[jidUsuario] || [];
+      if (!lista.length) { await sock.sendMessage(jidChat, { text: 'Aún no tengo nada guardado de ti 🤔' }); return true; }
+      const resumen = lista.map(m => `👤 ${m.texto}\n🤖 ${m.respuesta}`).join('\n\n');
+      await sock.sendMessage(jidChat, { text: `🧠 Esto recuerdo de ti:\n\n${resumen}` });
+      return true;
+    }
+
+    case '/olvidarme': { olvidarUsuario(jidUsuario); await sock.sendMessage(jidChat, { text: 'Listo, borré todo lo que recordaba de ti 🗑️' }); return true; }
+  }
+  return false;
+}
 async function procesarMensajeGrupo(sock, msg, identificadoresBot) {
   const jidGrupo = msg.key.remoteJid;
   const jidUsuario = msg.key.participant || msg.key.remoteJid;
@@ -1222,8 +1318,9 @@ async function procesarMensajeGrupo(sock, msg, identificadoresBot) {
   if (pendientesPropietario.has(clavePendientePropietario)) {
     pendientesPropietario.delete(clavePendientePropietario);
     if (texto.trim() === CODIGO_DUEÑO) {
-      propietariosVerificados.add(extraerNumero(jidUsuario));
-      await sock.sendMessage(jidGrupo, { text: '👑 Contraseña correcta. Te reconozco como propietaria/o del bot en este chat — ya puedes agregar o eliminar integrantes del clan, vincular grupos y silenciar usuarios.' });
+      const numeroReal = await resolverNumeroReal(sock, jidGrupo, jidUsuario);
+      propietariosVerificados.add(numeroReal);
+      await sock.sendMessage(jidGrupo, { text: '👑 Contraseña correcta. Te reconozco como propietaria/o del bot — ya puedes agregar o eliminar integrantes del clan y silenciar usuarios en cualquier grupo o chat.' });
     } else {
       await sock.sendMessage(jidGrupo, { text: '❌ Contraseña incorrecta. Escribe /propietario para intentar de nuevo.' });
     }
@@ -1231,11 +1328,10 @@ async function procesarMensajeGrupo(sock, msg, identificadoresBot) {
   }
 
   registrarMensajeGrupo(jidGrupo, jidUsuario);
-  const textoLower = texto.toLowerCase();
 
   if (/^\/comando\s+anzy$/i.test(texto)) {
-    const texto_respuesta = esPropietarioEfectivo(jidUsuario) ? TEXTO_AYUDA_PROPIETARIO : TEXTO_AYUDA;
-    await sock.sendMessage(jidGrupo, { text: texto_respuesta });
+    const esDueño = await esPropietarioContexto(sock, jidGrupo, jidUsuario);
+    await sock.sendMessage(jidGrupo, { text: esDueño ? TEXTO_AYUDA_PROPIETARIO : TEXTO_AYUDA });
     return;
   }
 
@@ -1255,116 +1351,31 @@ async function procesarMensajeGrupo(sock, msg, identificadoresBot) {
   if (await manejarComandosClanUniversal(sock, jidGrupo, jidUsuario, texto)) return;
 
   const mencionados = msg.message.extendedTextMessage?.contextInfo?.mentionedJid || [];
-  const partesTexto = texto.split(/\s+/);
-  const comando = partesTexto[0].toLowerCase();
-  const resto = partesTexto.slice(1);
 
   try {
-    switch (comando) {
-      case '/frase': await sock.sendMessage(jidGrupo, { text: comandoFrase() }); return;
-      case '/perfil': await comandoPerfil(sock, jidGrupo, jidUsuario, mencionados[0]); return;
-      case '/ranking': { const { texto: t, mentions } = await comandoRanking(sock, jidGrupo); await sock.sendMessage(jidGrupo, { text: t, mentions }); return; }
-      case '/promover': await comandoPromoverDegradar(sock, jidGrupo, jidUsuario, mencionados, 'promote'); return;
-      case '/degradar': await comandoPromoverDegradar(sock, jidGrupo, jidUsuario, mencionados, 'demote'); return;
-      case '/todos': await comandoTodos(sock, jidGrupo, jidUsuario, resto.join(' ')); return;
-      case '/cerrar': await comandoCerrarGrupo(sock, jidGrupo, jidUsuario, true); return;
-      case '/abrir': await comandoCerrarGrupo(sock, jidGrupo, jidUsuario, false); return;
-      case '/propietario': {
-        pendientesPropietario.set(clavePendientePropietario, Date.now());
-        await sock.sendMessage(jidGrupo, { text: '🔐 Escribe la contraseña de propietario para continuar:' });
-        return;
-      }
-      case '/silencio': {
-        if (!(await tienePermisoClan(sock, jidGrupo, jidUsuario))) {
-          await sock.sendMessage(jidGrupo, { text: 'Solo las admins o el propietario pueden usar este comando 🚫' });
-          return;
-        }
-        if (!mencionados.length) { await sock.sendMessage(jidGrupo, { text: 'Menciona a quién silenciar: /silencio @usuario' }); return; }
-        mencionados.forEach(j => SILENCIADOS.add(extraerNumero(j)));
-        guardarSilenciados();
-        await sock.sendMessage(jidGrupo, { text: `🔇 Listo, dejé de responderle a ${mencionados.length} usuario(s).` });
-        return;
-      }
-      case '/activarse': {
-        if (!(await tienePermisoClan(sock, jidGrupo, jidUsuario))) {
-          await sock.sendMessage(jidGrupo, { text: 'Solo las admins o el propietario pueden usar este comando 🚫' });
-          return;
-        }
-        if (!mencionados.length) { await sock.sendMessage(jidGrupo, { text: 'Menciona a quién reactivar: /activarse @usuario' }); return; }
-        mencionados.forEach(j => SILENCIADOS.delete(extraerNumero(j)));
-        guardarSilenciados();
-        await sock.sendMessage(jidGrupo, { text: `🔊 Listo, ya vuelvo a responderle a ${mencionados.length} usuario(s).` });
-        return;
-      }
-      case '/novia': {
-        const sub = (resto[0] || '').toLowerCase();
-        const claveNovia = `${jidGrupo}:${jidUsuario}`;
-        if (sub === 'on') {
-          modoNovia.set(claveNovia, true);
-          await sock.sendMessage(jidGrupo, { text: '💕 Listo mi amor, activé el modo novia solo para ti... ahora te voy a hablar distinto 😘' });
-        } else if (sub === 'off') {
-          modoNovia.delete(claveNovia);
-          await sock.sendMessage(jidGrupo, { text: '💫 Ok, volví a mi forma normal contigo.' });
-        } else {
-          await sock.sendMessage(jidGrupo, { text: 'Uso:\n/novia on — activa el modo novia\n/novia off — lo desactiva' });
-        }
-        return;
-      }
-      case '/recordatorio': {
-        if (!(await esAdminGrupo(sock, jidGrupo, jidUsuario))) { await sock.sendMessage(jidGrupo, { text: 'Solo admins pueden programar recordatorios 🚫' }); return; }
-        const entrada = resto[0] || '';
-        const textoRecordatorio = resto.slice(1).join(' ');
-        const match = entrada.match(/^(\d+)([smh])$/i);
-        if (!match || !textoRecordatorio) {
-          await sock.sendMessage(jidGrupo, { text: 'Uso: /recordatorio <tiempo><S|M|H> <texto>\nEj:\n/recordatorio 30S avisar\n/recordatorio 15M avisar\n/recordatorio 10H avisar' });
-          return;
-        }
-        const cantidad = parseInt(match[1], 10);
-        const unidad = match[2].toLowerCase();
-        const multiplicador = unidad === 's' ? 1000 : unidad === 'm' ? 60000 : 3600000;
-        const etiquetaUnidad = unidad === 's' ? 'segundos' : unidad === 'm' ? 'minutos' : 'horas';
-        programarRecordatorioGrupo(jidGrupo, cantidad * multiplicador, textoRecordatorio);
-        await sock.sendMessage(jidGrupo, { text: `⏰ Listo, aviso en ${cantidad} ${etiquetaUnidad}: "${textoRecordatorio}"` });
-        return;
-      }
-      case '/info': await sock.sendMessage(jidGrupo, { text: generarTextoInfo() }); return;
-      case '/creador': await sock.sendMessage(jidGrupo, { text: TEXTO_CREADOR }); return;
-      case '/recordar': {
-        const lista = memoriaPersistente[jidUsuario] || [];
-        if (!lista.length) { await sock.sendMessage(jidGrupo, { text: 'Aún no tengo nada guardado de ti 🤔' }); return; }
-        const resumen = lista.map(m => `👤 ${m.texto}\n🤖 ${m.respuesta}`).join('\n\n');
-        await sock.sendMessage(jidGrupo, { text: `🧠 Esto recuerdo de ti:\n\n${resumen}` });
-        return;
-      }
-      case '/olvidarme': { olvidarUsuario(jidUsuario); await sock.sendMessage(jidGrupo, { text: 'Listo, borré todo lo que recordaba de ti 🗑️' }); return; }
-      case '/movimiento': case '/movimientos': await comandoMovimientos(sock, jidGrupo, jidUsuario, resto.join(' ')); return;
-    }
+    const manejado = await manejarComandosGenerales(sock, jidGrupo, jidUsuario, texto, mencionados, true, clavePendientePropietario);
+    if (manejado) return;
   } catch (err) {
     console.log('❌ Error en comando:', err.message);
     return;
   }
 
-  const deteccion = detectarLlamadaIA(texto, msg, identificadoresBot);
-  if (!deteccion.llamar) return;
+  if (!debeResponderIA(texto, msg, identificadoresBot)) return;
 
   if (esMensajeDeCrisis(texto)) {
     try { await sock.sendMessage(JID_DUEÑO, { text: `🚨 Alerta: ${nombreContacto} en grupo escribió algo que parece señal de crisis: "${texto}"` }); } catch (err) {}
   }
 
   try {
-    let consultaLimpia = texto.replace(/@\d+/g, '');
-    consultaLimpia = deteccion.hot
-      ? consultaLimpia.replace(/^\/anzy\s+hot\s*/i, '').trim()
-      : consultaLimpia.replace(/^\/\S*\s*/, '').trim();
-    if (!consultaLimpia) consultaLimpia = texto;
-
+    const consultaLimpia = texto.replace(/@\d+/g, '').replace(/^\/\S*\s*/, '').trim() || texto;
     const textoCitado = extraerTextoCitado(msg);
+    const esDueño = await esPropietarioContexto(sock, jidGrupo, jidUsuario);
     let notas = `Mensaje de ${nombreContacto} dentro de un grupo de WhatsApp, hay más personas leyendo y puede haber otros bots.`;
+    if (esDueño) notas += `\n\nIMPORTANTE: quien escribe es TU PROPIETARIO/CREADOR — trátalo con más cercanía y calidez, como corresponde con quien te creó.`;
     if (textoCitado) notas += `\n\nMENSAJE CITADO (a lo que está respondiendo ${nombreContacto}): "${textoCitado}"`;
     notas += obtenerContextoCorto(jidUsuario);
 
-    const noviaActiva = modoNovia.get(`${jidGrupo}:${jidUsuario}`) || false;
-    const respuesta = await generarRespuestaIA(consultaLimpia, notas, noviaActiva, deteccion.hot);
+    const respuesta = await generarRespuestaIA(consultaLimpia, notas, jidGrupo, jidUsuario);
     await enviarRespuestaHumanizada(sock, jidGrupo, respuesta, [jidUsuario]);
     agregarAMemoriaCorta(jidUsuario, texto, respuesta);
   } catch (err) {
@@ -1482,22 +1493,16 @@ async function iniciarBot() {
           pendientesPropietario.delete(remitente);
           if (textoPersonal.trim() === CODIGO_DUEÑO) {
             propietariosVerificados.add(extraerNumero(remitente));
-            await sock.sendMessage(remitente, { text: '👑 Contraseña correcta. Te reconozco como propietaria/o del bot — ya puedes agregar o eliminar integrantes del clan, vincular grupos y silenciar usuarios desde aquí.' });
+            await sock.sendMessage(remitente, { text: '👑 Contraseña correcta. Te reconozco como propietaria/o del bot — ya puedes agregar o eliminar integrantes del clan y silenciar usuarios desde aquí y en cualquier grupo.' });
           } else {
             await sock.sendMessage(remitente, { text: '❌ Contraseña incorrecta. Escribe /propietario para intentar de nuevo.' });
           }
           return;
         }
 
-        if (textoPersonal.toLowerCase() === '/propietario') {
-          pendientesPropietario.set(remitente, Date.now());
-          await sock.sendMessage(remitente, { text: '🔐 Escribe la contraseña de propietario para continuar:' });
-          return;
-        }
-
         if (/^\/comando\s+anzy$/i.test(textoPersonal)) {
-          const texto_respuesta = esPropietarioEfectivo(remitente) ? TEXTO_AYUDA_PROPIETARIO : TEXTO_AYUDA;
-          await sock.sendMessage(remitente, { text: texto_respuesta });
+          const esDueño = esPropietarioEfectivo(remitente);
+          await sock.sendMessage(remitente, { text: esDueño ? TEXTO_AYUDA_PROPIETARIO : TEXTO_AYUDA });
           return;
         }
 
@@ -1520,17 +1525,22 @@ async function iniciarBot() {
           return;
         }
 
-        // ── IA también responde en chat personal (con soporte de /anzy hot) ──
-        const deteccion = detectarLlamadaIA(textoPersonal, msg, IDENTIFICADORES_BOT_CACHE);
-        if (deteccion.llamar) {
+        try {
+          const manejado = await manejarComandosGenerales(sock, remitente, remitente, textoPersonal, [], false, remitente);
+          if (manejado) return;
+        } catch (err) {
+          console.log('❌ Error en comando (privado):', err.message);
+          return;
+        }
+
+        if (debeResponderIA(textoPersonal, msg, IDENTIFICADORES_BOT_CACHE)) {
           try {
-            let consultaLimpia = deteccion.hot
-              ? textoPersonal.replace(/^\/anzy\s+hot\s*/i, '').trim()
-              : textoPersonal.replace(/^\/\S*\s*/, '').trim();
-            if (!consultaLimpia) consultaLimpia = textoPersonal;
-            const notas = `Mensaje privado de ${msg.pushName || 'un usuario'}.` + obtenerContextoCorto(remitente);
-            const noviaActiva = modoNovia.get(`${remitente}:${remitente}`) || false;
-            const respuesta = await generarRespuestaIA(consultaLimpia, notas, noviaActiva, deteccion.hot);
+            const consultaLimpia = textoPersonal.replace(/^\/\S*\s*/, '').trim() || textoPersonal;
+            const esDueño = esPropietarioEfectivo(remitente);
+            let notas = `Mensaje privado de ${msg.pushName || 'un usuario'}.`;
+            if (esDueño) notas += `\n\nIMPORTANTE: quien escribe es TU PROPIETARIO/CREADOR — trátalo con más cercanía y calidez, como corresponde con quien te creó.`;
+            notas += obtenerContextoCorto(remitente);
+            const respuesta = await generarRespuestaIA(consultaLimpia, notas, remitente, remitente);
             await enviarRespuestaHumanizada(sock, remitente, respuesta, []);
             agregarAMemoriaCorta(remitente, textoPersonal, respuesta);
           } catch (err) {
@@ -1574,17 +1584,17 @@ setInterval(async () => {
 const LISTA_COMANDOS_PANEL = [
   { cat: '🧠 Inteligencia Artificial', items: [
     ['/anzy <pregunta>', 'Pregúntale a la IA'],
-    ['/anzy hot <pregunta>', 'Nivel de personalidad más atrevido'],
     ['@bot <pregunta>', 'Mencionando al bot']
+  ]},
+  { cat: '🎭 Modos de personalidad', items: [
+    ['/novia on · /novia off', 'Modo cariñoso y coqueto'],
+    ['/hot on · /hot off', 'Modo más atrevido y directo'],
+    ['/amiga on · /amiga off', 'Modo amiga cercana, relajada y con chispa']
   ]},
   { cat: '🎉 Diversión y utilidades', items: [
     ['/tiktok · /tik tok <enlace>', 'Video o fotos de TikTok sin marca de agua — funciona en grupo y en privado 🎬'],
     ['/frase', 'Frase random'],
     ['/perfil @user', 'Actividad en el grupo']
-  ]},
-  { cat: '💕 Modo Novia', items: [
-    ['/novia on', 'Activa un modo cariñoso y coqueto conmigo'],
-    ['/novia off', 'Vuelve a mi forma normal']
   ]},
   { cat: '👑 Admin', items: [
     ['/promover @user', 'Lo hace admin'],
@@ -1598,11 +1608,9 @@ const LISTA_COMANDOS_PANEL = [
     ['/activarse @user', 'El bot vuelve a responderle']
   ]},
   { cat: '👑 Propietario', items: [
-    ['/propietario', 'Pide contraseña (grupo o privado) y te reconoce como propietaria/o'],
-    ['/verificacion grupo <4 dígitos>', 'Le da un código a este grupo (úsalo dentro del grupo)'],
-    ['/acceder grupo <4 dígitos>', 'Desde cualquier chat, vincula ese chat al clan de ese grupo']
+    ['/propietario', 'Pide contraseña (grupo o privado) y te reconoce como propietaria/o']
   ]},
-  { cat: '👥 Clan · registro paso a paso', items: [
+  { cat: '👥 Clan · registro paso a paso (lista GLOBAL, igual en todos los grupos)', items: [
     ['/nombreff <nombre>', 'Guarda el nombre'],
     ['/numeroff <número>', 'Guarda el número'],
     ['/idff <ID>', 'Guarda el ID FF'],
