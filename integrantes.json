@@ -1,3 +1,13 @@
 {
-  "clan_global": []
+  "clan_global": [
+    {
+      "nombre": "Carlos",
+      "numero": "01030288392",
+      "idFF": "82040229",
+      "apodo": "pinocho",
+      "agregadoPor": "203912799899707",
+      "codigo": "95",
+      "fecha": "2026-08-22T01:02:26.836Z"
+    }
+  ]
 }
