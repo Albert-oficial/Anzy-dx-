@@ -106,6 +106,12 @@ async function descargarVideoTiktokConYtDlp(url) {
   throw new Error('yt-dlp falló después de varios intentos');
 }
 
+// La API de yt-dlp casi nunca puede con publicaciones de fotos+audio (no son
+// un "video" real), así que para slideshows vamos DIRECTO a la API tikwm.
+function esProbablementeSlideshow(url) {
+  return /\/photo\//i.test(url);
+}
+
 async function descargarVideoTiktokConAPI(url) {
   for (let intento = 1; intento <= MAX_INTENTOS_TIKTOK; intento++) {
     try {
@@ -120,7 +126,9 @@ async function descargarVideoTiktokConAPI(url) {
       }
 
       if (Array.isArray(data.data.images) && data.data.images.length > 0) {
-        return { tipo: 'slideshow', imagenes: data.data.images, audio: data.data.music || null };
+        let audioUrl = data.data.music || null;
+        if (audioUrl && audioUrl.startsWith('/')) audioUrl = `https://www.tikwm.com${audioUrl}`;
+        return { tipo: 'slideshow', imagenes: data.data.images, audio: audioUrl };
       }
 
       if (data.data.play) {
@@ -140,12 +148,73 @@ async function descargarVideoTiktokConAPI(url) {
 }
 
 async function descargarVideoTiktok(url) {
+  // Si parece foto/slideshow, yt-dlp casi seguro va a fallar — ahorramos
+  // tiempo yendo directo a la API en vez de esperar el timeout de yt-dlp.
+  if (esProbablementeSlideshow(url)) {
+    return await descargarVideoTiktokConAPI(url);
+  }
   try {
     const archivo = await descargarVideoTiktokConYtDlp(url);
     return { tipo: 'archivo', ruta: archivo };
   } catch (err) {
     console.log('⚠️ yt-dlp no pudo con TikTok (puede ser un slideshow de fotos), probando con la API:', err.message);
     return await descargarVideoTiktokConAPI(url);
+  }
+}
+
+// ── Envío del resultado de TikTok — compartido entre grupo y chat personal ──
+async function enviarResultadoTiktok(sock, jidDestino, resultado) {
+  const captionLimpio = '🎥 ¡Aquí está tu video! ✨';
+  if (resultado.tipo === 'archivo') {
+    await sock.sendMessage(jidDestino, { video: { url: resultado.ruta }, caption: captionLimpio });
+    return;
+  }
+  if (resultado.tipo === 'video_url') {
+    await sock.sendMessage(jidDestino, { video: { url: resultado.url }, caption: captionLimpio });
+    return;
+  }
+  if (resultado.tipo === 'slideshow') {
+    await sock.sendMessage(jidDestino, { text: `📸 Esto es una publicación de fotos — te mando ${resultado.imagenes.length} imagen(es) 💕` });
+    let enviadas = 0;
+    for (const imgUrl of resultado.imagenes.slice(0, 15)) {
+      try {
+        await sock.sendMessage(jidDestino, { image: { url: imgUrl } });
+        enviadas++;
+      } catch (err) {
+        console.log('⚠️ No se pudo enviar una imagen del slideshow:', err.message);
+      }
+    }
+    if (resultado.audio) {
+      try {
+        await sock.sendMessage(jidDestino, { audio: { url: resultado.audio }, mimetype: 'audio/mpeg' });
+      } catch (err) {
+        console.log('⚠️ No se pudo enviar el audio del slideshow:', err.message);
+      }
+    }
+    if (enviadas === 0) {
+      await sock.sendMessage(jidDestino, { text: '💔 No pude enviar ninguna de las imágenes, puede que el enlace haya vencido. Intenta de nuevo.' });
+    }
+  }
+}
+
+async function manejarComandoTiktok(sock, jidDestino, texto) {
+  const enlace = texto.replace(PATRON_COMANDO_TIKTOK, '').trim();
+  if (!ENLACE_TIKTOK.test(enlace)) {
+    await sock.sendMessage(jidDestino, { text: '💕 Escríbelo así:\n/tiktok enlace-de-tiktok\n(también funciona /tik tok)' });
+    return;
+  }
+  await sock.sendMessage(jidDestino, { text: '🎬 ¡Claro que sí! Dame un momentito 💖' });
+  let rutaTemporal = null;
+  try {
+    const resultado = await descargarVideoTiktok(enlace);
+    if (resultado.tipo === 'archivo') rutaTemporal = resultado.ruta;
+    await enviarResultadoTiktok(sock, jidDestino, resultado);
+    console.log('✅ TikTok enviado correctamente');
+  } catch (err) {
+    console.error('❌ Error descargando TikTok:', err.message);
+    await sock.sendMessage(jidDestino, { text: '💔 No pude bajar ese contenido, intenta con otro enlace 🙏💖' });
+  } finally {
+    if (rutaTemporal && fs.existsSync(rutaTemporal)) { try { fs.unlinkSync(rutaTemporal); } catch {} }
   }
 }
 const CLAVE_IA_PRINCIPAL = process.env.CLAVE_IA_PRINCIPAL;
@@ -157,7 +226,7 @@ const MODELO_RESPALDO2 = 'gemini-3.6-flash';
 const CODIGO_DUEÑO = '2927760128';
 const NOMBRE_BOT = 'Anzy';
 const CREADOR = 'Albert Oficial';
-const VERSION_BOT = '2.10.0';
+const VERSION_BOT = '2.12.0';
 const TU_NUMERO = '51996399291';
 const JID_DUEÑO = `${TU_NUMERO}@s.whatsapp.net`;
 const PUERTO = process.env.PORT || 3000;
@@ -170,18 +239,18 @@ if (!CLAVE_IA_PRINCIPAL) console.log('❌ ALERTA: no se detectó CLAVE_IA_PRINCI
 if (!CLAVE_IA_RESPALDO) console.log('⚠️ Aviso: no se detectó CLAVE_IA_RESPALDO.');
 if (!CLAVE_IA_RESPALDO2) console.log('⚠️ Aviso: no se detectó CLAVE_IA_RESPALDO2.');
 
-// ── Lista de comandos PÚBLICA (la ven todos al escribir /comando anzy) ──────
 const TEXTO_AYUDA = `╔═══════════════════════╗
    COMANDOS · ${NOMBRE_BOT}
 ╚═══════════════════════╝
 
 🧠 *Inteligencia Artificial*
 • Mencióname, o escribe /anzy <pregunta>
+• /anzy hot <pregunta> — un nivel de personalidad más atrevido y directo
 • Responde/cita un mensaje y mencióname para que lo lea también
 
 🎉 *Diversión y utilidades*
 • /frase — frase random
-• /tiktok <enlace> — video o foto/slideshow de TikTok sin marca de agua (también /tik tok) 🎬
+• /tiktok <enlace> — video o foto/slideshow de TikTok sin marca de agua (también /tik tok, funciona en grupo y en privado) 🎬
 • /perfil @usuario — actividad en el grupo
 
 💕 *Modo Novia*
@@ -189,7 +258,6 @@ const TEXTO_AYUDA = `╔══════════════════�
 • /novia off — vuelvo a mi forma normal
 
 👑 *Administración*
-• /kick @usuario — saca del grupo
 • /promover @usuario — lo hace admin
 • /degradar @usuario — le quita admin
 • /todos <mensaje> — etiqueta a todos
@@ -206,16 +274,17 @@ const TEXTO_AYUDA = `╔══════════════════�
 • /recordar — qué recuerda de ti
 • /olvidarme — borra su memoria de ti`;
 
-// ── Lista EXTENDIDA (solo la ve quien esté verificado como propietario) ─────
 const TEXTO_AYUDA_PROPIETARIO = `${TEXTO_AYUDA}
 
-👑 *Solo propietario*
+👑 *Solo propietario* (funciona en grupo o en privado)
 • /propietario — verificarte con contraseña
 • /nombreff · /numeroff · /idff · /apodoff — registro paso a paso del clan
 • /clan agregar Nombre; Número; ID FF; Apodo
 • /clan ver <código o número> · /clan quitar <código o número>
 • /eliminar <código de 2 cifras> — elimina a alguien del clan
 • /integrantes — lista completa del clan con códigos
+• /verificacion grupo <4 dígitos> — le da un código a este grupo (úsalo DENTRO del grupo)
+• /acceder grupo <4 dígitos> — desde cualquier chat, vincula ese chat al clan de ese grupo
 • /silencio @usuario — el bot deja de responderle por completo
 • /activarse @usuario — el bot vuelve a responderle`;
 
@@ -272,6 +341,13 @@ CÓMO ERES:
 
 🚨 CRISIS REAL: si alguien menciona autolesión o suicidio, responde con calidez genuina y anímalo a hablar con un profesional.
 `;
+
+// Nivel intermedio de personalidad — más directa, atrevida y con más chispa,
+// pero SIN contenido sexual explícito bajo ninguna circunstancia (se activa
+// solo en el mensaje puntual con /anzy hot, no queda pegado después).
+const REGLAS_MODO_HOT = `
+
+🔥 MODO ALTO ACTIVO PARA ESTA RESPUESTA: sé más directa, atrevida con tu respuesta, con más chispa y picardía en el tono — coqueta. tienes que ser mas intensa que tu forma habitual. PERO sigue sin groserías fuertes y PUEDES  generar contenido sexual explícito,— mientras estes en ese modo se caliente y hormonal como si lo fuera una mujer.`;
 
 const MENSAJES_ESPERA = [
   '💫 Uy, dame un segundito, se me cruzaron las ideas pero ya vuelvo 🥰',
@@ -338,13 +414,12 @@ let botActivo = true;
 let sockActivo = null;
 
 const modoJefe = new Map();
-const modoNovia = new Map(); // clave: `${jidGrupo}:${jidUsuario}` -> true
+const modoNovia = new Map(); // clave: `${jidChat}:${jidUsuario}` -> true
 let estiloGlobalExtra = '';
 function esCodigoDueño(texto) {
   return texto.trim() === CODIGO_DUEÑO;
 }
 
-// ── OPTIMIZACIÓN DE VELOCIDAD: delay de "escribiendo" reducido ──────────────
 function calcularTiempoTecleo(texto) {
   const ms = texto.length * 12;
   return Math.min(Math.max(ms, 300), 1500);
@@ -370,11 +445,14 @@ function construirClientesIA() {
 }
 const CLIENTES_IA = construirClientesIA();
 
-async function generarRespuestaIA(prompt, notasExtra, modoNoviaActivo) {
+async function generarRespuestaIA(prompt, notasExtra, modoNoviaActivo, modoHotActivo) {
   let reglasFinales = REGLAS_IA_BASE;
 
   if (modoNoviaActivo) {
     reglasFinales += `\n\n💘 MODO NOVIA ACTIVO (solo con esta persona, prioridad alta): háblale como su novia virtual — cariñosa, coqueta, un poco insinuante/"caliente" según el tono de la charla, puedes decirle "mi amor", "bebé" o similar con naturalidad. PERO nunca vulgar y NUNCA contenido sexual explícito, bajo ninguna circunstancia. Si la conversación se sube mucho de tono, redirige con cariño sin ser cortante.`;
+  }
+  if (modoHotActivo) {
+    reglasFinales += REGLAS_MODO_HOT;
   }
   if (estiloGlobalExtra) {
     reglasFinales += `\n\n🔧 DIRECTIVA GLOBAL ACTIVA (aplica a TODOS los chats, prioridad máxima): ${estiloGlobalExtra}`;
@@ -427,10 +505,14 @@ function esMencionAlBot(msg, texto, identificadoresBot) {
   return identificadoresBot.some(id => texto.includes(`@${id}`));
 }
 
-function debeResponderIA(texto, msg, identificadoresBot) {
-  if (esMencionAlBot(msg, texto, identificadoresBot)) return true;
-  const primeraPalabra = (texto.trim().split(/\s+/)[0] || '').toLowerCase();
-  return primeraPalabra === COMANDO_LLAMADA_IA;
+// Devuelve { llamar: bool, hot: bool } — hot=true si el mensaje empieza con /anzy hot
+function detectarLlamadaIA(texto, msg, identificadoresBot) {
+  const t = texto.trim();
+  if (/^\/anzy\s+hot\b/i.test(t)) return { llamar: true, hot: true };
+  if (esMencionAlBot(msg, texto, identificadoresBot)) return { llamar: true, hot: false };
+  const primeraPalabra = (t.split(/\s+/)[0] || '').toLowerCase();
+  if (primeraPalabra === COMANDO_LLAMADA_IA) return { llamar: true, hot: false };
+  return { llamar: false, hot: false };
 }
 
 function extraerTextoCitado(msg) {
@@ -452,13 +534,12 @@ function extraerNumero(jid) {
   return (jid || '').split('@')[0].split(':')[0];
 }
 
-// ── PROPIETARIO: número real + verificación por contraseña ──────────────────
 function esPropietario(jid) {
   if (!jid) return false;
   return extraerNumero(jid) === TU_NUMERO;
 }
-const propietariosVerificados = new Set(); // números que pasaron la contraseña
-const pendientesPropietario = new Map();   // clave -> true, esperando que escriban la contraseña
+const propietariosVerificados = new Set();
+const pendientesPropietario = new Map();
 function esPropietarioEfectivo(jid) {
   if (!jid) return false;
   return esPropietario(jid) || propietariosVerificados.has(extraerNumero(jid));
@@ -474,7 +555,6 @@ function buscarConteoEnMapa(mapa, jid) {
   return 0;
 }
 
-// ── SILENCIADOS: números a los que el bot ignora por completo ───────────────
 const ARCHIVO_SILENCIADOS = path.join(__dirname, 'silenciados.json');
 function cargarSilenciados() {
   try { return new Set(JSON.parse(fs.readFileSync(ARCHIVO_SILENCIADOS, 'utf-8'))); }
@@ -508,83 +588,148 @@ function obtenerNombreVisible(jid) {
   return NOMBRES_CONOCIDOS.get(numero) || `+${numero}`;
 }
 
-// ── JSONBIN: limpieza estricta de la clave para evitar caracteres invisibles ──
-function limpiarClaveJsonbin(valor) {
+// ── VINCULACIÓN DE CLANES ENTRE GRUPOS ──────────────────────────────────────
+const ARCHIVO_VINCULOS = path.join(__dirname, 'vinculos_clan.json');
+function cargarVinculos() {
+  try {
+    const data = JSON.parse(fs.readFileSync(ARCHIVO_VINCULOS, 'utf-8'));
+    return {
+      codigos: data.codigos || {},
+      codigoAGrupo: data.codigoAGrupo || {},
+      vinculos: data.vinculos || {}
+    };
+  } catch (err) {
+    return { codigos: {}, codigoAGrupo: {}, vinculos: {} };
+  }
+}
+let ESTADO_VINCULOS = cargarVinculos();
+let guardadoVinculosPendiente = null;
+function guardarVinculos() {
+  if (guardadoVinculosPendiente) clearTimeout(guardadoVinculosPendiente);
+  guardadoVinculosPendiente = setTimeout(() => {
+    fs.writeFile(ARCHIVO_VINCULOS, JSON.stringify(ESTADO_VINCULOS, null, 2), (err) => {
+      if (err) console.log('⚠️ Error guardando vínculos de clan:', err.message);
+    });
+  }, 1000);
+}
+
+function claveVinculo(jidChatActual, jidUsuario) {
+  return `${jidChatActual}:${extraerNumero(jidUsuario)}`;
+}
+
+function resolverGrupoClan(jidChatActual, jidUsuario) {
+  return ESTADO_VINCULOS.vinculos[claveVinculo(jidChatActual, jidUsuario)] || jidChatActual;
+}
+
+async function comandoVerificarGrupo(sock, jidGrupo, jidUsuario, codigo) {
+  if (!jidGrupo.endsWith('@g.us')) {
+    await sock.sendMessage(jidGrupo, { text: 'Este comando solo se puede usar dentro de un grupo (el que quieres verificar).' });
+    return;
+  }
+  if (!esPropietarioEfectivo(jidUsuario)) {
+    await sock.sendMessage(jidGrupo, { text: 'Solo el propietario puede verificar un grupo 🚫' });
+    return;
+  }
+  if (!codigo || !/^\d{4}$/.test(codigo)) {
+    await sock.sendMessage(jidGrupo, { text: 'Uso: /verificacion grupo <código de 4 dígitos>\nEj: /verificacion grupo 2927' });
+    return;
+  }
+  ESTADO_VINCULOS.codigos[jidGrupo] = codigo;
+  ESTADO_VINCULOS.codigoAGrupo[codigo] = jidGrupo;
+  guardarVinculos();
+  await sock.sendMessage(jidGrupo, { text: `✅ Grupo verificado con el código ${codigo}.\n\nDesde cualquier chat (grupo o personal) puedes escribir:\n/acceder grupo ${codigo}\n\nY los comandos de clan de ese chat van a usar la lista de este grupo.` });
+}
+
+async function comandoAccederGrupo(sock, jidChatActual, jidUsuario, codigo) {
+  if (!esPropietarioEfectivo(jidUsuario)) {
+    await sock.sendMessage(jidChatActual, { text: 'Solo el propietario puede usar este comando 🚫' });
+    return;
+  }
+  if (!codigo || !/^\d{4}$/.test(codigo)) {
+    await sock.sendMessage(jidChatActual, { text: 'Uso: /acceder grupo <código de 4 dígitos>' });
+    return;
+  }
+  const grupoObjetivo = ESTADO_VINCULOS.codigoAGrupo[codigo];
+  if (!grupoObjetivo) {
+    await sock.sendMessage(jidChatActual, { text: 'No encontré ningún grupo verificado con ese código.' });
+    return;
+  }
+  ESTADO_VINCULOS.vinculos[claveVinculo(jidChatActual, jidUsuario)] = grupoObjetivo;
+  guardarVinculos();
+  let nombreGrupo = 'ese grupo';
+  try { const meta = await sock.groupMetadata(grupoObjetivo); nombreGrupo = meta.subject || nombreGrupo; } catch (err) {}
+  await sock.sendMessage(jidChatActual, { text: `🔗 Listo, este chat quedó vinculado al clan de *${nombreGrupo}*.\n\nAhora /integrantes, /clan, /eliminar, /nombreff, etc. van a usar esa lista, hasta que uses /acceder grupo con otro código.` });
+}
+
+// ── NUBE: GitHub como almacenamiento gratuito de integrantes ────────────────
+function limpiarValorEnv(valor) {
   return (valor || '').replace(/[^\x20-\x7E]/g, '').trim();
 }
 
-const JSONBIN_API_KEY = limpiarClaveJsonbin(process.env.JSONBIN_API_KEY);
-const JSONBIN_BASE = 'https://api.jsonbin.io/v3/b';
-let jsonbinBinIdIntegrantes = limpiarClaveJsonbin(process.env.JSONBIN_BIN_ID_INTEGRANTES) || null;
+const GITHUB_TOKEN = limpiarValorEnv(process.env.GITHUB_TOKEN);
+const GITHUB_REPO = limpiarValorEnv(process.env.GITHUB_REPO);
+const GITHUB_RUTA_ARCHIVO = limpiarValorEnv(process.env.GITHUB_RUTA_ARCHIVO) || 'integrantes.json';
+const GITHUB_RAMA = limpiarValorEnv(process.env.GITHUB_RAMA) || 'main';
+const GITHUB_API_BASE = 'https://api.github.com';
 
-if (JSONBIN_API_KEY) {
-  console.log(`🔍 JSONBIN_API_KEY detectada — longitud: ${JSONBIN_API_KEY.length} caracteres (debería ser 60 en una Master Key típica)`);
+if (GITHUB_TOKEN) {
+  console.log(`🔍 GITHUB_TOKEN detectado — longitud: ${GITHUB_TOKEN.length} caracteres`);
 }
 
-async function jsonbinCrearBin(dataInicial, nombre) {
-  const res = await fetch(JSONBIN_BASE, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Master-Key': JSONBIN_API_KEY,
-      'X-Bin-Name': nombre,
-      'X-Bin-Private': 'true'
-    },
-    body: JSON.stringify(dataInicial)
+let githubShaActual = null;
+
+async function githubLeerIntegrantes() {
+  const url = `${GITHUB_API_BASE}/repos/${GITHUB_REPO}/contents/${encodeURIComponent(GITHUB_RUTA_ARCHIVO)}?ref=${GITHUB_RAMA}`;
+  const res = await fetch(url, {
+    headers: { 'Authorization': `Bearer ${GITHUB_TOKEN}`, 'Accept': 'application/vnd.github+json' }
   });
+  if (res.status === 404) return null;
   if (!res.ok) {
     const detalle = await res.text().catch(() => '');
-    throw new Error(`No se pudo crear el bin (${res.status}): ${detalle}`);
+    throw new Error(`No se pudo leer de GitHub (${res.status}): ${detalle}`);
   }
   const data = await res.json();
-  return data?.metadata?.id || null;
+  githubShaActual = data.sha;
+  const contenido = Buffer.from(data.content, 'base64').toString('utf-8');
+  return JSON.parse(contenido);
 }
 
-async function jsonbinLeer(binId) {
-  const res = await fetch(`${JSONBIN_BASE}/${binId}/latest`, { headers: { 'X-Master-Key': JSONBIN_API_KEY } });
-  if (!res.ok) {
-    const detalle = await res.text().catch(() => '');
-    throw new Error(`No se pudo leer el bin (${res.status}): ${detalle}`);
-  }
-  const data = await res.json();
-  return data.record;
-}
-
-async function jsonbinGuardar(binId, data) {
-  const res = await fetch(`${JSONBIN_BASE}/${binId}`, {
+async function githubGuardarIntegrantes(dataObjeto) {
+  const url = `${GITHUB_API_BASE}/repos/${GITHUB_REPO}/contents/${encodeURIComponent(GITHUB_RUTA_ARCHIVO)}`;
+  const contenidoBase64 = Buffer.from(JSON.stringify(dataObjeto, null, 2), 'utf-8').toString('base64');
+  const body = { message: `Actualización automática de integrantes — ${new Date().toISOString()}`, content: contenidoBase64, branch: GITHUB_RAMA };
+  if (githubShaActual) body.sha = githubShaActual;
+  const res = await fetch(url, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json', 'X-Master-Key': JSONBIN_API_KEY },
-    body: JSON.stringify(data)
+    headers: { 'Authorization': `Bearer ${GITHUB_TOKEN}`, 'Accept': 'application/vnd.github+json', 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
   });
   if (!res.ok) {
     const detalle = await res.text().catch(() => '');
-    throw new Error(`No se pudo guardar en el bin (${res.status}): ${detalle}`);
+    throw new Error(`No se pudo guardar en GitHub (${res.status}): ${detalle}`);
   }
+  const data = await res.json();
+  githubShaActual = data.content.sha;
 }
 
 async function inicializarNubeIntegrantes() {
-  if (!JSONBIN_API_KEY) {
-    console.log('⚠️ JSONBIN_API_KEY no configurada — los integrantes se pueden perder si Render reinicia el disco. Configura JSONBIN_API_KEY para que la lista sea permanente.');
+  if (!GITHUB_TOKEN || !GITHUB_REPO) {
+    console.log('⚠️ GITHUB_TOKEN o GITHUB_REPO no configurados — los integrantes se pueden perder si Render reinicia el disco.');
     return;
   }
   try {
-    if (jsonbinBinIdIntegrantes) {
-      const nube = await jsonbinLeer(jsonbinBinIdIntegrantes);
-      integrantesClan = nube && typeof nube === 'object' ? nube : {};
-      console.log('☁️ Integrantes cargados desde la nube (JSONBin) — persisten aunque el bot se reinicie.');
+    const nube = await githubLeerIntegrantes();
+    if (nube && typeof nube === 'object') {
+      integrantesClan = nube;
+      console.log('☁️ Integrantes cargados desde GitHub — persisten aunque el bot se reinicie.');
     } else {
-      const nuevoId = await jsonbinCrearBin(integrantesClan || {}, 'anzy-integrantes');
-      if (nuevoId) {
-        jsonbinBinIdIntegrantes = nuevoId;
-        console.log('🆕 Se creó un bin nuevo en JSONBin.');
-        console.log(`👉 IMPORTANTE: agrega en Render: JSONBIN_BIN_ID_INTEGRANTES=${nuevoId} — si no lo agregas, la próxima vez se creará OTRO bin distinto y perderás la conexión con este.`);
-      }
+      await githubGuardarIntegrantes(integrantesClan || {});
+      console.log('🆕 No había archivo en GitHub, se creó uno nuevo con los datos actuales.');
     }
   } catch (err) {
-    console.log('⚠️ No se pudo conectar con JSONBin, sigo usando el respaldo local:', err.message);
+    console.log('⚠️ No se pudo conectar con GitHub, sigo usando el respaldo local:', err.message);
   }
-}
-const ARCHIVO_INTEGRANTES = path.join(__dirname, 'integrantes.json');
+}const ARCHIVO_INTEGRANTES = path.join(__dirname, 'integrantes.json');
 function cargarIntegrantes() {
   try { return JSON.parse(fs.readFileSync(ARCHIVO_INTEGRANTES, 'utf-8')); }
   catch (err) { return {}; }
@@ -597,9 +742,9 @@ function guardarIntegrantes() {
     fs.writeFile(ARCHIVO_INTEGRANTES, JSON.stringify(integrantesClan, null, 2), (err) => {
       if (err) console.log('⚠️ Error guardando integrantes localmente:', err.message);
     });
-    if (JSONBIN_API_KEY && jsonbinBinIdIntegrantes) {
-      try { await jsonbinGuardar(jsonbinBinIdIntegrantes, integrantesClan); }
-      catch (err) { console.log('⚠️ Error guardando integrantes en la nube:', err.message); }
+    if (GITHUB_TOKEN && GITHUB_REPO) {
+      try { await githubGuardarIntegrantes(integrantesClan); }
+      catch (err) { console.log('⚠️ Error guardando integrantes en GitHub:', err.message); }
     }
   }, 1500);
 }
@@ -644,7 +789,7 @@ function accionFueDelBot(jidGrupo, accion, jid) {
   return ACCIONES_BOT_RECIENTES.has(`${jidGrupo}:${accion}:${extraerNumero(jid)}`);
 }
 
-function registrarAccionAdmin(sock, jidGrupo, accionOriginal, jidEjecutor, jidsObjetivo) {
+function registrarAccionAdmin(sock, jidGrupo, accionOriginal, jidEjecutor, jidsObjetivo, nombreGrupoTexto) {
   let accion = accionOriginal;
   let objetivos = (jidsObjetivo || []).map(j => extraerNumero(j));
   const numeroEjecutor = jidEjecutor ? extraerNumero(jidEjecutor) : null;
@@ -655,7 +800,7 @@ function registrarAccionAdmin(sock, jidGrupo, accionOriginal, jidEjecutor, jidsO
     objetivos = [];
   }
 
-  const entrada = { accion, jidGrupo, ejecutor: numeroEjecutor, objetivos, fecha: new Date().toISOString() };
+  const entrada = { accion, jidGrupo, nombreGrupo: nombreGrupoTexto || null, ejecutor: numeroEjecutor, objetivos, fecha: new Date().toISOString() };
   registroMovimientos.push(entrada);
   if (registroMovimientos.length > MAX_REGISTROS_MOVIMIENTOS) registroMovimientos.shift();
   guardarMovimientos();
@@ -697,7 +842,6 @@ async function esAdminGrupo(sock, jidGrupo, jidUsuario) {
   }
 }
 
-// Admin del grupo O propietario (real o verificado por contraseña)
 async function tienePermisoClan(sock, jidGrupo, jidUsuario) {
   if (esPropietarioEfectivo(jidUsuario)) return true;
   return await esAdminGrupo(sock, jidGrupo, jidUsuario);
@@ -779,12 +923,13 @@ function obtenerEtiquetaPersona(jidGrupo, criterio) {
 
 function formatearFichaIntegrante(ficha) {
   return `┏━━━━━━━━━━━━━━━━━━━┓
-┃  INTEGRANTE #${ficha.codigo}
+┃   FICHA DE INTEGRANTE
 ┗━━━━━━━━━━━━━━━━━━━┛
 👤 Nombre  : ${ficha.nombre}
 📱 Número  : ${ficha.numero}
 🆔 ID FF   : ${ficha.idFF}
-🏷️ Apodo   : ${ficha.apodo}`;
+🏷️ Apodo   : ${ficha.apodo}
+🔑 Código  : ${ficha.codigo}`;
 }
 
 function generarTextoListaClan(jidGrupo) {
@@ -792,7 +937,7 @@ function generarTextoListaClan(jidGrupo) {
   const lista = integrantesClan[jidGrupo] || [];
   if (!lista.length) return '📋 Aún no hay integrantes registradas en el clan.';
   const cuerpo = lista.map(ficha => formatearFichaIntegrante(ficha)).join('\n\n');
-  return `╔═══════════════════════╗\n   INTEGRANTES DEL CLAN (${lista.length})\n╚═══════════════════════╝\n\n${cuerpo}\n\n💡 Usa /eliminar <código> para quitar a alguien de la lista.`;
+  return `╔═══════════════════════╗\n   INTEGRANTES DEL CLAN (${lista.length})\n╚═══════════════════════╝\n\n${cuerpo}`;
 }
 
 async function comandoClanAgregar(sock, jidGrupo, jidUsuario, textoCompleto) {
@@ -805,8 +950,9 @@ async function comandoClanAgregar(sock, jidGrupo, jidUsuario, textoCompleto) {
     await sock.sendMessage(jidGrupo, { text: 'Formato: /clan agregar Nombre; Número; ID FF; Apodo' });
     return;
   }
+  const grupoDatos = resolverGrupoClan(jidGrupo, jidUsuario);
   const [nombre, numero, idFF, apodo] = partes;
-  const { actualizado, ficha } = agregarIntegrante(jidGrupo, { nombre, numero, idFF, apodo, agregadoPor: jidUsuario.split('@')[0] });
+  const { actualizado, ficha } = agregarIntegrante(grupoDatos, { nombre, numero, idFF, apodo, agregadoPor: jidUsuario.split('@')[0] });
   await sock.sendMessage(jidGrupo, { text: `${actualizado ? '✏️ Ficha actualizada' : '✅ Integrante registrada'}:\n\n${formatearFichaIntegrante(ficha)}` });
 }
 
@@ -816,13 +962,15 @@ async function comandoClanQuitar(sock, jidGrupo, jidUsuario, criterio) {
     return;
   }
   if (!criterio) { await sock.sendMessage(jidGrupo, { text: 'Uso: /clan quitar <número, ID FF o código>' }); return; }
-  const ok = quitarIntegrante(jidGrupo, criterio);
+  const grupoDatos = resolverGrupoClan(jidGrupo, jidUsuario);
+  const ok = quitarIntegrante(grupoDatos, criterio);
   await sock.sendMessage(jidGrupo, { text: ok ? '🗑️ Integrante eliminada de la lista.' : 'No encontré a nadie con ese dato.' });
 }
 
-async function comandoClanVer(sock, jidGrupo, criterio) {
+async function comandoClanVer(sock, jidGrupo, jidUsuario, criterio) {
   if (!criterio) { await sock.sendMessage(jidGrupo, { text: 'Uso: /clan ver <número, ID FF o código>' }); return; }
-  const ficha = buscarIntegrante(jidGrupo, criterio);
+  const grupoDatos = resolverGrupoClan(jidGrupo, jidUsuario);
+  const ficha = buscarIntegrante(grupoDatos, criterio);
   if (!ficha) { await sock.sendMessage(jidGrupo, { text: 'No encontré a nadie con ese dato.' }); return; }
   await sock.sendMessage(jidGrupo, { text: formatearFichaIntegrante(ficha) });
 }
@@ -836,9 +984,10 @@ async function comandoEliminarPorCodigo(sock, jidGrupo, jidUsuario, codigo) {
     await sock.sendMessage(jidGrupo, { text: 'Uso: /eliminar <código de dos cifras>\nEj: /eliminar 07\n\nRevisa los códigos con /integrantes' });
     return;
   }
-  asegurarCodigosClan(jidGrupo);
+  const grupoDatos = resolverGrupoClan(jidGrupo, jidUsuario);
+  asegurarCodigosClan(grupoDatos);
   const codigoNormalizado = codigo.padStart(2, '0');
-  const lista = integrantesClan[jidGrupo] || [];
+  const lista = integrantesClan[grupoDatos] || [];
   const indice = lista.findIndex(i => i.codigo === codigoNormalizado);
   if (indice === -1) {
     await sock.sendMessage(jidGrupo, { text: `No encontré a nadie con el código ${codigoNormalizado}. Usa /integrantes para revisar la lista.` });
@@ -872,13 +1021,14 @@ async function comandoCampoIntegrante(sock, jidGrupo, jidUsuario, campo, valor) 
     await sock.sendMessage(jidGrupo, { text: `Uso: ${ETIQUETAS_CAMPO_BORRADOR[campo]} <valor>` });
     return;
   }
-  const borrador = actualizarBorrador(jidGrupo, jidUsuario, campo, valor);
+  const grupoDatos = resolverGrupoClan(jidGrupo, jidUsuario);
+  const borrador = actualizarBorrador(grupoDatos, jidUsuario, campo, valor);
   if (borradorCompleto(borrador)) {
-    const { actualizado, ficha } = agregarIntegrante(jidGrupo, {
+    const { actualizado, ficha } = agregarIntegrante(grupoDatos, {
       nombre: borrador.nombre, numero: borrador.numero, idFF: borrador.idFF, apodo: borrador.apodo,
       agregadoPor: jidUsuario.split('@')[0]
     });
-    borradoresIntegrante.delete(claveBorrador(jidGrupo, jidUsuario));
+    borradoresIntegrante.delete(claveBorrador(grupoDatos, jidUsuario));
     await sock.sendMessage(jidGrupo, { text: `${actualizado ? '✏️ Ficha actualizada' : '✅ ¡Integrante registrada!'} 💖\n\n${formatearFichaIntegrante(ficha)}` });
   } else {
     const faltan = ['nombre', 'numero', 'idFF', 'apodo'].filter(c => !borrador[c]).map(c => ETIQUETAS_CAMPO_BORRADOR[c]);
@@ -886,14 +1036,68 @@ async function comandoCampoIntegrante(sock, jidGrupo, jidUsuario, campo, valor) 
   }
 }
 
+async function manejarComandosClanUniversal(sock, jidChatActual, jidUsuario, texto) {
+  const matchNombre = texto.match(/^\/nombreff\s+(.+)/i);
+  if (matchNombre) { await comandoCampoIntegrante(sock, jidChatActual, jidUsuario, 'nombre', matchNombre[1].trim()); return true; }
+  const matchNumero = texto.match(/^\/numeroff\s+(.+)/i);
+  if (matchNumero) { await comandoCampoIntegrante(sock, jidChatActual, jidUsuario, 'numero', matchNumero[1].trim()); return true; }
+  const matchIdFF = texto.match(/^\/idff\s+(.+)/i);
+  if (matchIdFF) { await comandoCampoIntegrante(sock, jidChatActual, jidUsuario, 'idFF', matchIdFF[1].trim()); return true; }
+  const matchApodo = texto.match(/^\/apodoff\s+(.+)/i);
+  if (matchApodo) { await comandoCampoIntegrante(sock, jidChatActual, jidUsuario, 'apodo', matchApodo[1].trim()); return true; }
+
+  const partesTexto = texto.trim().split(/\s+/);
+  const comando = (partesTexto[0] || '').toLowerCase();
+  const resto = partesTexto.slice(1);
+
+  if (comando === '/integrantes') {
+    if (!(await tienePermisoClan(sock, jidChatActual, jidUsuario))) {
+      await sock.sendMessage(jidChatActual, { text: 'Solo las admins o el propietario pueden ver la lista del clan 🚫' });
+      return true;
+    }
+    const grupoDatos = resolverGrupoClan(jidChatActual, jidUsuario);
+    await sock.sendMessage(jidChatActual, { text: generarTextoListaClan(grupoDatos) });
+    return true;
+  }
+  if (comando === '/eliminar') { await comandoEliminarPorCodigo(sock, jidChatActual, jidUsuario, resto[0]); return true; }
+  if (comando === '/clan') {
+    const sub = (resto[0] || '').toLowerCase();
+    const restoSub = resto.slice(1).join(' ');
+    if (sub === 'agregar') { await comandoClanAgregar(sock, jidChatActual, jidUsuario, restoSub); return true; }
+    if (sub === 'quitar') { await comandoClanQuitar(sock, jidChatActual, jidUsuario, restoSub.trim()); return true; }
+    if (sub === 'ver') { await comandoClanVer(sock, jidChatActual, jidUsuario, restoSub.trim()); return true; }
+    if (sub === 'lista') {
+      const grupoDatos = resolverGrupoClan(jidChatActual, jidUsuario);
+      await sock.sendMessage(jidChatActual, { text: generarTextoListaClan(grupoDatos) });
+      return true;
+    }
+    await sock.sendMessage(jidChatActual, { text: 'Usa /integrantes para ver la lista del clan 🙂' });
+    return true;
+  }
+  if (comando === '/verificacion' || comando === '/verificación') {
+    const sub = (resto[0] || '').toLowerCase();
+    if (sub === 'grupo') { await comandoVerificarGrupo(sock, jidChatActual, jidUsuario, resto[1]); return true; }
+    await sock.sendMessage(jidChatActual, { text: 'Uso: /verificacion grupo <código de 4 dígitos>' });
+    return true;
+  }
+  if (comando === '/acceder') {
+    const sub = (resto[0] || '').toLowerCase();
+    if (sub === 'grupo') { await comandoAccederGrupo(sock, jidChatActual, jidUsuario, resto[1]); return true; }
+    await sock.sendMessage(jidChatActual, { text: 'Uso: /acceder grupo <código de 4 dígitos>' });
+    return true;
+  }
+  return false;
+}
+
 function formatearMovimiento(jidGrupo, r) {
   const info = ETIQUETAS_MOVIMIENTO[r.accion] || { icono: '•', texto: r.accion };
-  const fecha = new Date(r.fecha).toLocaleString('es-PE', { timeZone: 'America/Lima', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
-  const ejecutorTexto = obtenerEtiquetaPersona(jidGrupo, r.ejecutor);
-  let cuerpo = `┌─────────────────────┐\n│ ${info.icono}  MOVIMIENTO DE GRUPO\n└─────────────────────┘\n\n👤 *Realizado por:* ${ejecutorTexto}\n📌 *Acción:* ${info.texto}`;
+  const fecha = new Date(r.fecha).toLocaleString('es-PE', { timeZone: 'America/Lima', day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  const numeroEjecutor = r.ejecutor;
+  const nombreEjecutor = numeroEjecutor ? obtenerEtiquetaPersona(jidGrupo, numeroEjecutor) : 'Desconocido';
+  let cuerpo = `┌─────────────────────┐\n│ ${info.icono}  MOVIMIENTO DE GRUPO\n└─────────────────────┘\n\n👥 *Grupo:* ${r.nombreGrupo || 'Sin nombre registrado'}\n👤 *Realizado por:* ${nombreEjecutor}${numeroEjecutor ? ` (+${numeroEjecutor})` : ''}\n📌 *Acción:* ${info.texto}`;
   if (r.objetivos && r.objetivos.length) {
-    const nombres = r.objetivos.map(n => obtenerEtiquetaPersona(jidGrupo, n)).join(', ');
-    cuerpo += `\n🎯 *Afectado(s):* ${nombres}`;
+    const detalles = r.objetivos.map(n => `${obtenerEtiquetaPersona(jidGrupo, n)} (+${n})`).join(', ');
+    cuerpo += `\n🎯 *Afectado(s):* ${detalles}`;
   }
   cuerpo += `\n🕐 *Fecha:* ${fecha}`;
   return cuerpo;
@@ -914,25 +1118,6 @@ async function comandoMovimientos(sock, jidGrupo, jidUsuario, argumentoTexto) {
   const cuerpo = registros.map(r => formatearMovimiento(jidGrupo, r)).join('\n\n');
   await sock.sendMessage(jidGrupo, { text: `╔═══════════════════════╗\n  ÚLTIMOS MOVIMIENTOS\n╚═══════════════════════╝\n\n${cuerpo}` });
 }
-async function comandoKick(sock, jidGrupo, jidUsuario, mencionados) {
-  if (!(await esAdminGrupo(sock, jidGrupo, jidUsuario))) {
-    await sock.sendMessage(jidGrupo, { text: 'Solo las admins del grupo pueden usar este comando 🚫' });
-    return;
-  }
-  if (!mencionados.length) {
-    await sock.sendMessage(jidGrupo, { text: 'Menciona a quién quieres sacar: /kick @usuario' });
-    return;
-  }
-  try {
-    marcarAccionBotReciente(jidGrupo, 'remove', mencionados);
-    await sock.groupParticipantsUpdate(jidGrupo, mencionados, 'remove');
-    registrarAccionAdmin(sock, jidGrupo, 'remove', jidUsuario, mencionados);
-    await sock.sendMessage(jidGrupo, { text: `👋 Listo, saqué a ${mencionados.length} del grupo.` });
-  } catch (err) {
-    await sock.sendMessage(jidGrupo, { text: 'No pude sacarla, revisa que el bot sea admin del grupo 🙏' });
-  }
-}
-
 async function comandoPromoverDegradar(sock, jidGrupo, jidUsuario, mencionados, accion) {
   if (!(await esAdminGrupo(sock, jidGrupo, jidUsuario))) {
     await sock.sendMessage(jidGrupo, { text: 'Solo las admins pueden usar este comando 🚫' });
@@ -945,7 +1130,9 @@ async function comandoPromoverDegradar(sock, jidGrupo, jidUsuario, mencionados, 
   try {
     marcarAccionBotReciente(jidGrupo, accion, mencionados);
     await sock.groupParticipantsUpdate(jidGrupo, mencionados, accion);
-    registrarAccionAdmin(sock, jidGrupo, accion, jidUsuario, mencionados);
+    let nombreGrupo = null;
+    try { const meta = await sock.groupMetadata(jidGrupo); nombreGrupo = meta.subject; } catch (err) {}
+    registrarAccionAdmin(sock, jidGrupo, accion, jidUsuario, mencionados, nombreGrupo);
     await sock.sendMessage(jidGrupo, { text: accion === 'promote' ? '⭐ Listo, ahora es admin.' : '🔻 Listo, ya no es admin.' });
   } catch (err) {
     await sock.sendMessage(jidGrupo, { text: 'No pude hacer el cambio, revisa que el bot sea admin del grupo.' });
@@ -975,7 +1162,9 @@ async function comandoCerrarGrupo(sock, jidGrupo, jidUsuario, cerrar) {
   }
   try {
     await sock.groupSettingUpdate(jidGrupo, cerrar ? 'announcement' : 'not_announcement');
-    registrarAccionAdmin(sock, jidGrupo, cerrar ? 'cerrar' : 'abrir', jidUsuario, []);
+    let nombreGrupo = null;
+    try { const meta = await sock.groupMetadata(jidGrupo); nombreGrupo = meta.subject; } catch (err) {}
+    registrarAccionAdmin(sock, jidGrupo, cerrar ? 'cerrar' : 'abrir', jidUsuario, [], nombreGrupo);
     await sock.sendMessage(jidGrupo, { text: cerrar ? '🔒 Grupo cerrado, solo admins escriben.' : '🔓 Grupo abierto para todas.' });
   } catch (err) {
     await sock.sendMessage(jidGrupo, { text: 'No pude cambiar la configuración, revisa que el bot sea admin.' });
@@ -1029,13 +1218,12 @@ async function procesarMensajeGrupo(sock, msg, identificadoresBot) {
   if (esNumeroIgnorado(jidUsuario)) return;
   registrarNombreConocido(jidUsuario, msg.pushName);
 
-  // ── Si está esperando la contraseña de propietario, interceptamos aquí ────
   const clavePendientePropietario = `${jidGrupo}:${jidUsuario}`;
   if (pendientesPropietario.has(clavePendientePropietario)) {
     pendientesPropietario.delete(clavePendientePropietario);
     if (texto.trim() === CODIGO_DUEÑO) {
       propietariosVerificados.add(extraerNumero(jidUsuario));
-      await sock.sendMessage(jidGrupo, { text: '👑 Contraseña correcta. Te reconozco como propietaria/o del bot en este chat — ya puedes agregar o eliminar integrantes del clan y silenciar usuarios.' });
+      await sock.sendMessage(jidGrupo, { text: '👑 Contraseña correcta. Te reconozco como propietaria/o del bot en este chat — ya puedes agregar o eliminar integrantes del clan, vincular grupos y silenciar usuarios.' });
     } else {
       await sock.sendMessage(jidGrupo, { text: '❌ Contraseña incorrecta. Escribe /propietario para intentar de nuevo.' });
     }
@@ -1045,43 +1233,14 @@ async function procesarMensajeGrupo(sock, msg, identificadoresBot) {
   registrarMensajeGrupo(jidGrupo, jidUsuario);
   const textoLower = texto.toLowerCase();
 
-  // ── /comando anzy — lista de comandos (mayúsculas/minúsculas indistinto) ──
   if (/^\/comando\s+anzy$/i.test(texto)) {
     const texto_respuesta = esPropietarioEfectivo(jidUsuario) ? TEXTO_AYUDA_PROPIETARIO : TEXTO_AYUDA;
     await sock.sendMessage(jidGrupo, { text: texto_respuesta });
     return;
   }
 
-  // ── TIKTOK (video o foto/slideshow) ────────────────────────────────
   if (PATRON_COMANDO_TIKTOK.test(texto)) {
-    const enlace = texto.replace(PATRON_COMANDO_TIKTOK, '').trim();
-    if (!ENLACE_TIKTOK.test(enlace)) {
-      await sock.sendMessage(jidGrupo, { text: '💕 Escríbelo así:\n/tiktok enlace-de-tiktok\n(también funciona /tik tok)' });
-      return;
-    }
-    await sock.sendMessage(jidGrupo, { text: '🎬 ¡Claro que sí! Dame un momentito 💖' });
-    let rutaTemporal = null;
-    try {
-      const resultado = await descargarVideoTiktok(enlace);
-      const captionLimpio = '🎥 ¡Aquí está tu video! ✨';
-      if (resultado.tipo === 'archivo') {
-        rutaTemporal = resultado.ruta;
-        await sock.sendMessage(jidGrupo, { video: { url: resultado.ruta }, caption: captionLimpio });
-      } else if (resultado.tipo === 'video_url') {
-        await sock.sendMessage(jidGrupo, { video: { url: resultado.url }, caption: captionLimpio });
-      } else if (resultado.tipo === 'slideshow') {
-        await sock.sendMessage(jidGrupo, { text: '📸 Esto es una publicación de fotos — te mando las imágenes 💕' });
-        for (const imgUrl of resultado.imagenes.slice(0, 10)) {
-          await sock.sendMessage(jidGrupo, { image: { url: imgUrl } });
-        }
-      }
-      console.log('✅ TikTok enviado correctamente');
-    } catch (err) {
-      console.error('❌ Error descargando TikTok:', err.message);
-      await sock.sendMessage(jidGrupo, { text: '💔 No pude bajar ese contenido, intenta con otro enlace 🙏💖' });
-    } finally {
-      if (rutaTemporal && fs.existsSync(rutaTemporal)) { try { fs.unlinkSync(rutaTemporal); } catch {} }
-    }
+    await manejarComandoTiktok(sock, jidGrupo, texto);
     return;
   }
 
@@ -1093,23 +1252,7 @@ async function procesarMensajeGrupo(sock, msg, identificadoresBot) {
     return;
   }
 
-  const matchNombre = texto.match(/^\/nombreff\s+(.+)/i);
-  if (matchNombre) { await comandoCampoIntegrante(sock, jidGrupo, jidUsuario, 'nombre', matchNombre[1].trim()); return; }
-  const matchNumero = texto.match(/^\/numeroff\s+(.+)/i);
-  if (matchNumero) { await comandoCampoIntegrante(sock, jidGrupo, jidUsuario, 'numero', matchNumero[1].trim()); return; }
-  const matchIdFF = texto.match(/^\/idff\s+(.+)/i);
-  if (matchIdFF) { await comandoCampoIntegrante(sock, jidGrupo, jidUsuario, 'idFF', matchIdFF[1].trim()); return; }
-  const matchApodo = texto.match(/^\/apodoff\s+(.+)/i);
-  if (matchApodo) { await comandoCampoIntegrante(sock, jidGrupo, jidUsuario, 'apodo', matchApodo[1].trim()); return; }
-
-  if (textoLower === '/integrantes') {
-    if (!(await tienePermisoClan(sock, jidGrupo, jidUsuario))) {
-      await sock.sendMessage(jidGrupo, { text: 'Solo las admins o el propietario pueden ver la lista del clan 🚫' });
-      return;
-    }
-    await sock.sendMessage(jidGrupo, { text: generarTextoListaClan(jidGrupo) });
-    return;
-  }
+  if (await manejarComandosClanUniversal(sock, jidGrupo, jidUsuario, texto)) return;
 
   const mencionados = msg.message.extendedTextMessage?.contextInfo?.mentionedJid || [];
   const partesTexto = texto.split(/\s+/);
@@ -1121,13 +1264,11 @@ async function procesarMensajeGrupo(sock, msg, identificadoresBot) {
       case '/frase': await sock.sendMessage(jidGrupo, { text: comandoFrase() }); return;
       case '/perfil': await comandoPerfil(sock, jidGrupo, jidUsuario, mencionados[0]); return;
       case '/ranking': { const { texto: t, mentions } = await comandoRanking(sock, jidGrupo); await sock.sendMessage(jidGrupo, { text: t, mentions }); return; }
-      case '/kick': case '/sacar': case '/ban': await comandoKick(sock, jidGrupo, jidUsuario, mencionados); return;
       case '/promover': await comandoPromoverDegradar(sock, jidGrupo, jidUsuario, mencionados, 'promote'); return;
       case '/degradar': await comandoPromoverDegradar(sock, jidGrupo, jidUsuario, mencionados, 'demote'); return;
       case '/todos': await comandoTodos(sock, jidGrupo, jidUsuario, resto.join(' ')); return;
       case '/cerrar': await comandoCerrarGrupo(sock, jidGrupo, jidUsuario, true); return;
       case '/abrir': await comandoCerrarGrupo(sock, jidGrupo, jidUsuario, false); return;
-      case '/eliminar': await comandoEliminarPorCodigo(sock, jidGrupo, jidUsuario, resto[0]); return;
       case '/propietario': {
         pendientesPropietario.set(clavePendientePropietario, Date.now());
         await sock.sendMessage(jidGrupo, { text: '🔐 Escribe la contraseña de propietario para continuar:' });
@@ -1196,16 +1337,6 @@ async function procesarMensajeGrupo(sock, msg, identificadoresBot) {
         return;
       }
       case '/olvidarme': { olvidarUsuario(jidUsuario); await sock.sendMessage(jidGrupo, { text: 'Listo, borré todo lo que recordaba de ti 🗑️' }); return; }
-      case '/clan': {
-        const sub = (resto[0] || '').toLowerCase();
-        const restoSub = resto.slice(1).join(' ');
-        if (sub === 'agregar') { await comandoClanAgregar(sock, jidGrupo, jidUsuario, restoSub); return; }
-        if (sub === 'quitar') { await comandoClanQuitar(sock, jidGrupo, jidUsuario, restoSub.trim()); return; }
-        if (sub === 'ver') { await comandoClanVer(sock, jidGrupo, restoSub.trim()); return; }
-        if (sub === 'lista') { await comandoClanLista(sock, jidGrupo); return; }
-        await sock.sendMessage(jidGrupo, { text: 'Usa /integrantes para ver la lista del clan 🙂' });
-        return;
-      }
       case '/movimiento': case '/movimientos': await comandoMovimientos(sock, jidGrupo, jidUsuario, resto.join(' ')); return;
     }
   } catch (err) {
@@ -1213,21 +1344,27 @@ async function procesarMensajeGrupo(sock, msg, identificadoresBot) {
     return;
   }
 
-  if (!debeResponderIA(texto, msg, identificadoresBot)) return;
+  const deteccion = detectarLlamadaIA(texto, msg, identificadoresBot);
+  if (!deteccion.llamar) return;
 
   if (esMensajeDeCrisis(texto)) {
     try { await sock.sendMessage(JID_DUEÑO, { text: `🚨 Alerta: ${nombreContacto} en grupo escribió algo que parece señal de crisis: "${texto}"` }); } catch (err) {}
   }
 
   try {
-    const consultaLimpia = texto.replace(/@\d+/g, '').replace(/^\/\S*\s*/, '').trim() || texto;
+    let consultaLimpia = texto.replace(/@\d+/g, '');
+    consultaLimpia = deteccion.hot
+      ? consultaLimpia.replace(/^\/anzy\s+hot\s*/i, '').trim()
+      : consultaLimpia.replace(/^\/\S*\s*/, '').trim();
+    if (!consultaLimpia) consultaLimpia = texto;
+
     const textoCitado = extraerTextoCitado(msg);
     let notas = `Mensaje de ${nombreContacto} dentro de un grupo de WhatsApp, hay más personas leyendo y puede haber otros bots.`;
     if (textoCitado) notas += `\n\nMENSAJE CITADO (a lo que está respondiendo ${nombreContacto}): "${textoCitado}"`;
     notas += obtenerContextoCorto(jidUsuario);
 
     const noviaActiva = modoNovia.get(`${jidGrupo}:${jidUsuario}`) || false;
-    const respuesta = await generarRespuestaIA(consultaLimpia, notas, noviaActiva);
+    const respuesta = await generarRespuestaIA(consultaLimpia, notas, noviaActiva, deteccion.hot);
     await enviarRespuestaHumanizada(sock, jidGrupo, respuesta, [jidUsuario]);
     agregarAMemoriaCorta(jidUsuario, texto, respuesta);
   } catch (err) {
@@ -1236,18 +1373,16 @@ async function procesarMensajeGrupo(sock, msg, identificadoresBot) {
   }
 }
 
-async function comandoClanLista(sock, jidGrupo) {
-  await sock.sendMessage(jidGrupo, { text: generarTextoListaClan(jidGrupo) });
-}
-
 function registrarBienvenidasYDespedidas(sock) {
   sock.ev.on('group-participants.update', async (evento) => {
     const { id: jidGrupo, participants, action, author } = evento;
+    let nombreGrupo = null;
+    try { const meta = await sock.groupMetadata(jidGrupo); nombreGrupo = meta.subject; } catch (err) {}
     for (const participanteRaw of participants) {
       const { jid: jidParticipante, numero } = normalizarParticipante(participanteRaw);
       if (!jidParticipante) continue;
       if (['add', 'remove', 'promote', 'demote'].includes(action) && !accionFueDelBot(jidGrupo, action, jidParticipante)) {
-        registrarAccionAdmin(sock, jidGrupo, action, author || null, [jidParticipante]);
+        registrarAccionAdmin(sock, jidGrupo, action, author || null, [jidParticipante], nombreGrupo);
       }
       try {
         if (action === 'promote') {
@@ -1273,7 +1408,7 @@ function calcularEsperaReconexion(intentos) {
 
 const almacenMensajes = new Map();
 let nubeInicializada = false;
-let IDENTIFICADORES_BOT_CACHE = []; // se calcula una sola vez al conectar, no en cada mensaje
+let IDENTIFICADORES_BOT_CACHE = [];
 
 async function iniciarBot() {
   limpiarArchivosTemporalesViejos();
@@ -1307,7 +1442,7 @@ async function iniciarBot() {
     }
     if (connection === 'open') {
       estado.conectado = true; estado.intentosReconexion = 0; estado.ultimoQR = null;
-      IDENTIFICADORES_BOT_CACHE = obtenerIdentificadoresBot(sock); // se calcula UNA vez aquí
+      IDENTIFICADORES_BOT_CACHE = obtenerIdentificadoresBot(sock);
       console.log('\n✅ BOT CONECTADO Y LISTO ✅');
       console.log('🆔 Identificadores del bot detectados:', IDENTIFICADORES_BOT_CACHE);
     }
@@ -1341,13 +1476,13 @@ async function iniciarBot() {
     if (!remitente.endsWith('@g.us')) {
       if (remitente.endsWith('@s.whatsapp.net')) {
         const textoPersonal = (msg.message.conversation || msg.message.extendedTextMessage?.text || '').trim();
+        if (esNumeroIgnorado(remitente)) return;
 
-        // ── Contraseña de propietario pendiente (chat personal) ──────────
         if (pendientesPropietario.has(remitente)) {
           pendientesPropietario.delete(remitente);
           if (textoPersonal.trim() === CODIGO_DUEÑO) {
             propietariosVerificados.add(extraerNumero(remitente));
-            await sock.sendMessage(remitente, { text: '👑 Contraseña correcta. Te reconozco como propietaria/o del bot — ya puedes agregar o eliminar integrantes del clan y silenciar usuarios en cualquier grupo.' });
+            await sock.sendMessage(remitente, { text: '👑 Contraseña correcta. Te reconozco como propietaria/o del bot — ya puedes agregar o eliminar integrantes del clan, vincular grupos y silenciar usuarios desde aquí.' });
           } else {
             await sock.sendMessage(remitente, { text: '❌ Contraseña incorrecta. Escribe /propietario para intentar de nuevo.' });
           }
@@ -1366,6 +1501,13 @@ async function iniciarBot() {
           return;
         }
 
+        if (PATRON_COMANDO_TIKTOK.test(textoPersonal)) {
+          await manejarComandoTiktok(sock, remitente, textoPersonal);
+          return;
+        }
+
+        if (await manejarComandosClanUniversal(sock, remitente, remitente, textoPersonal)) return;
+
         if (esCodigoDueño(textoPersonal)) {
           modoJefe.set(remitente, true);
           await sock.sendMessage(remitente, {
@@ -1376,6 +1518,25 @@ async function iniciarBot() {
         if (modoJefe.get(remitente)) {
           await procesarComandoJefe(sock, remitente, textoPersonal);
           return;
+        }
+
+        // ── IA también responde en chat personal (con soporte de /anzy hot) ──
+        const deteccion = detectarLlamadaIA(textoPersonal, msg, IDENTIFICADORES_BOT_CACHE);
+        if (deteccion.llamar) {
+          try {
+            let consultaLimpia = deteccion.hot
+              ? textoPersonal.replace(/^\/anzy\s+hot\s*/i, '').trim()
+              : textoPersonal.replace(/^\/\S*\s*/, '').trim();
+            if (!consultaLimpia) consultaLimpia = textoPersonal;
+            const notas = `Mensaje privado de ${msg.pushName || 'un usuario'}.` + obtenerContextoCorto(remitente);
+            const noviaActiva = modoNovia.get(`${remitente}:${remitente}`) || false;
+            const respuesta = await generarRespuestaIA(consultaLimpia, notas, noviaActiva, deteccion.hot);
+            await enviarRespuestaHumanizada(sock, remitente, respuesta, []);
+            agregarAMemoriaCorta(remitente, textoPersonal, respuesta);
+          } catch (err) {
+            console.log('❌ Error IA (privado):', err.message);
+            await sock.sendMessage(remitente, { text: mensajeEsperaAleatorio() });
+          }
         }
       }
       return;
@@ -1390,7 +1551,7 @@ async function iniciarBot() {
 
     estado.mensajesRecibidos++;
     try {
-      await procesarMensajeGrupo(sock, msg, IDENTIFICADORES_BOT_CACHE); // ya no se recalcula por mensaje
+      await procesarMensajeGrupo(sock, msg, IDENTIFICADORES_BOT_CACHE);
       estado.mensajesEnviados++;
     } catch (err) {
       console.log('❌ Error procesando mensaje de grupo:', err.message);
@@ -1413,10 +1574,11 @@ setInterval(async () => {
 const LISTA_COMANDOS_PANEL = [
   { cat: '🧠 Inteligencia Artificial', items: [
     ['/anzy <pregunta>', 'Pregúntale a la IA'],
+    ['/anzy hot <pregunta>', 'Nivel de personalidad más atrevido'],
     ['@bot <pregunta>', 'Mencionando al bot']
   ]},
   { cat: '🎉 Diversión y utilidades', items: [
-    ['/tiktok · /tik tok <enlace>', 'Video o fotos de TikTok sin marca de agua 🎬'],
+    ['/tiktok · /tik tok <enlace>', 'Video o fotos de TikTok sin marca de agua — funciona en grupo y en privado 🎬'],
     ['/frase', 'Frase random'],
     ['/perfil @user', 'Actividad en el grupo']
   ]},
@@ -1425,19 +1587,20 @@ const LISTA_COMANDOS_PANEL = [
     ['/novia off', 'Vuelve a mi forma normal']
   ]},
   { cat: '👑 Admin', items: [
-    ['/kick @user', 'Saca del grupo'],
     ['/promover @user', 'Lo hace admin'],
     ['/degradar @user', 'Le quita admin'],
     ['/todos <msj>', 'Etiqueta a todos'],
     ['/cerrar · /abrir', 'Controla quién escribe'],
     ['/recordatorio <n>S/M/H <texto>', 'Aviso al grupo, ej: 30M'],
     ['/ranking', 'Top de más activas'],
-    ['/movimiento', 'Últimos movimientos de admins 🗂️'],
+    ['/movimiento', 'Últimos movimientos de admins, con nombre y grupo 🗂️'],
     ['/silencio @user', 'El bot deja de responderle por completo'],
     ['/activarse @user', 'El bot vuelve a responderle']
   ]},
   { cat: '👑 Propietario', items: [
-    ['/propietario', 'Pide contraseña y te reconoce como propietaria/o (grupo o privado)']
+    ['/propietario', 'Pide contraseña (grupo o privado) y te reconoce como propietaria/o'],
+    ['/verificacion grupo <4 dígitos>', 'Le da un código a este grupo (úsalo dentro del grupo)'],
+    ['/acceder grupo <4 dígitos>', 'Desde cualquier chat, vincula ese chat al clan de ese grupo']
   ]},
   { cat: '👥 Clan · registro paso a paso', items: [
     ['/nombreff <nombre>', 'Guarda el nombre'],
