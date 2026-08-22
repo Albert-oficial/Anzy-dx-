@@ -1,5 +1,5 @@
 require('dotenv').config();
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, downloadMediaMessage } = require('@whiskeysockets/baileys');
 const { GoogleGenAI } = require('@google/genai');
 const qrcodeTerminal = require('qrcode-terminal');
 const QRCode = require('qrcode');
@@ -210,6 +210,19 @@ async function manejarComandoTiktok(sock, jidDestino, texto) {
     if (rutaTemporal && fs.existsSync(rutaTemporal)) { try { fs.unlinkSync(rutaTemporal); } catch {} }
   }
 }
+
+// ── Extrae el texto de un mensaje, incluyendo la DESCRIPCIÓN de una imagen ──
+// Esto permite comandos como "/fotoff 07" escritos como pie de foto.
+function obtenerTextoMensaje(msg) {
+  return (
+    msg.message.conversation ||
+    msg.message.extendedTextMessage?.text ||
+    msg.message.imageMessage?.caption ||
+    ''
+  ).trim();
+}
+
+const PATRON_COMANDO_FOTOFF = /^\/fotoff\s+(\S+)/i;
 const CLAVE_IA_PRINCIPAL = process.env.CLAVE_IA_PRINCIPAL;
 const CLAVE_IA_RESPALDO = process.env.CLAVE_IA_RESPALDO;
 const CLAVE_IA_RESPALDO2 = process.env.CLAVE_IA_RESPALDO2;
@@ -219,13 +232,13 @@ const MODELO_RESPALDO2 = 'gemini-3.6-flash';
 const CODIGO_DUEÑO = '2927760128';
 const NOMBRE_BOT = 'Anzy';
 const CREADOR = 'Albert Oficial';
-const VERSION_BOT = '2.14.0';
-const TU_NUMERO = '51996399291'; // número del PROPIETARIO (dueño)
-const NUMERO_BOT_VINCULADO = '51975922748'; // número donde el bot está activo
+const VERSION_BOT = '2.15.0';
+const TU_NUMERO = '51996399291';
+const NUMERO_BOT_VINCULADO = '51975922748';
 const JID_DUEÑO = `${TU_NUMERO}@s.whatsapp.net`;
 const PUERTO = process.env.PORT || 3000;
 const LIMITE_DIARIO_ESTIMADO = 1400;
-const MAX_TOKENS_RESPUESTA = 1500;
+const MAX_TOKENS_RESPUESTA = 1700;
 const INTEGRANTES_POR_PAGINA = 10;
 
 const COMANDO_LLAMADA_IA = '/anzy';
@@ -234,14 +247,12 @@ if (!CLAVE_IA_PRINCIPAL) console.log('❌ ALERTA: no se detectó CLAVE_IA_PRINCI
 if (!CLAVE_IA_RESPALDO) console.log('⚠️ Aviso: no se detectó CLAVE_IA_RESPALDO.');
 if (!CLAVE_IA_RESPALDO2) console.log('⚠️ Aviso: no se detectó CLAVE_IA_RESPALDO2.');
 
-const TEXTO_AYUDA = `╔═══════════════════════╗
-   COMANDOS · ${NOMBRE_BOT}
-╚═══════════════════════╝
+const TEXTO_AYUDA = `*COMANDOS · ${NOMBRE_BOT}*
 
 🧠 *Inteligencia Artificial*
 • Mencióname, o escribe /anzy <pregunta>
 • Responde/cita un mensaje y mencióname para que lo lea también
-• "Anzy pásame información de <nombre>" — busco a esa persona en el clan
+• "Anzy pásame información de <nombre>" o mencionando a alguien — busco a esa persona en el clan
 
 🎭 *Modos de personalidad* (funcionan en grupo y en privado)
 • /novia on · /novia off — modo cariñoso y coqueto
@@ -276,7 +287,8 @@ const TEXTO_AYUDA_PROPIETARIO = `${TEXTO_AYUDA}
 • /nombreff · /numeroff · /idff · /apodoff — registro paso a paso del clan
 • /clan agregar Nombre; Número; ID FF; Apodo
 • /clan ver <código o número> · /clan quitar <código o número>
-• /eliminar <código de 2 cifras> — elimina a alguien del clan
+• /fotoff <código> — envía una imagen con esta descripción para guardarle foto a esa integrante
+• /eliminar <código de 2 cifras> — elimina a alguien del clan (borra también su foto)
 • /integrantes — resumen y cuántas páginas hay
 • /lista 01 · /lista 02 · etc — ver el clan en bloques de 10
 • /integrante @usuario — ficha de esa persona (si ya está en el clan)
@@ -412,7 +424,6 @@ let botActivo = true;
 let sockActivo = null;
 
 const modoJefe = new Map();
-// Solo dos modos de personalidad ahora: novia y amiga. Uno apaga al otro.
 const modoNovia = new Map();
 const modoAmiga = new Map();
 let estiloGlobalExtra = '';
@@ -521,13 +532,24 @@ function debeResponderIA(texto, msg, identificadoresBot) {
   return primeraPalabra === COMANDO_LLAMADA_IA;
 }
 
-// ── Detecta si le están pidiendo info de alguien del clan por nombre, en
-// lenguaje natural, en vez de gastar una llamada a la IA. Ej: "pásame
-// información de Leandro", "info de Dayana", "datos de DayaOP".
+// ── Reconoce si la persona está pidiendo la ficha de alguien del clan, en
+// lenguaje natural. Cubre: "información de X", "info del integrante X",
+// "dame la lista del integrante X", "ficha de X", "datos sobre X", etc.
+// Es intencionalmente flexible: si al final no coincide con nadie del clan,
+// quien llama a esta función simplemente sigue con la conversación normal
+// de la IA en vez de bloquearla — así una frase casual como "tengo mucha
+// información sobre el tema" nunca interrumpe el chat.
 function detectarSolicitudInfoPorNombre(texto) {
-  const match = texto.match(/(?:informaci[oó]n|info|datos)\s+(?:de|sobre)\s+(.+)/i);
-  if (!match) return null;
-  return match[1].trim().replace(/[.?!]+$/, '');
+  const t = texto.trim();
+  if (!/\b(informaci[oó]n|informe|info|datos|ficha|perfil|lista)\b/i.test(t)) return null;
+  let resto = t
+    .replace(/^.*?\b(?:del|de la|de|sobre)\s+integrante\b/i, '')
+    .replace(/^.*?\b(?:informaci[oó]n|informe|info|datos|ficha|perfil|lista)\b/i, '')
+    .replace(/^\s*(?:del|de la|de|sobre)\s+/i, '')
+    .trim()
+    .replace(/[.?!]+$/, '');
+  if (!resto || resto.length < 2 || resto.length > 40) return null;
+  return resto;
 }
 
 function extraerTextoCitado(msg) {
@@ -549,8 +571,11 @@ function extraerNumero(jid) {
   return (jid || '').split('@')[0].split(':')[0];
 }
 
-async function resolverNumeroReal(sock, jidChat, jidUsuario) {
-  const numeroDirecto = extraerNumero(jidUsuario);
+// ── Resuelve el número REAL de cualquier jid (el que escribe o al que se
+// menciona) cruzando los datos del grupo. Arregla el bug donde WhatsApp
+// identifica a alguien con un ID alterno (LID) en vez de su número real.
+async function resolverNumeroReal(sock, jidChat, jidObjetivo) {
+  const numeroDirecto = extraerNumero(jidObjetivo);
   if (!jidChat || !jidChat.endsWith('@g.us')) return numeroDirecto;
   try {
     const metadata = await sock.groupMetadata(jidChat);
@@ -629,6 +654,8 @@ function obtenerNombreVisible(jid) {
 }
 
 const CLAVE_CLAN_GLOBAL = 'clan_global';
+const GITHUB_CARPETA_FOTOS = 'fotos';
+function rutaFotoIntegrante(codigo) { return `${GITHUB_CARPETA_FOTOS}/${codigo}.jpg`; }
 
 function limpiarValorEnv(valor) {
   return (valor || '').replace(/[^\x20-\x7E]/g, '').trim();
@@ -696,6 +723,64 @@ async function inicializarNubeIntegrantes() {
     }
   } catch (err) {
     console.log('⚠️ No se pudo conectar con GitHub, sigo usando el respaldo local:', err.message);
+  }
+}
+
+// ── FOTOS de integrantes: se guardan en la carpeta "fotos/" del mismo
+// repositorio de GitHub. Se suben/leen/borran con la misma API de contenido.
+async function githubSubirFoto(rutaArchivo, bufferImagen) {
+  const url = `${GITHUB_API_BASE}/repos/${GITHUB_REPO}/contents/${encodeURIComponent(rutaArchivo)}`;
+  let shaExistente = null;
+  try {
+    const resInfo = await fetch(`${url}?ref=${GITHUB_RAMA}`, {
+      headers: { 'Authorization': `Bearer ${GITHUB_TOKEN}`, 'Accept': 'application/vnd.github+json' }
+    });
+    if (resInfo.ok) { const infoData = await resInfo.json(); shaExistente = infoData.sha; }
+  } catch (err) {}
+  const body = {
+    message: `Foto de integrante actualizada — ${new Date().toISOString()}`,
+    content: bufferImagen.toString('base64'),
+    branch: GITHUB_RAMA
+  };
+  if (shaExistente) body.sha = shaExistente;
+  const res = await fetch(url, {
+    method: 'PUT',
+    headers: { 'Authorization': `Bearer ${GITHUB_TOKEN}`, 'Accept': 'application/vnd.github+json', 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  if (!res.ok) {
+    const detalle = await res.text().catch(() => '');
+    throw new Error(`No se pudo subir la foto a GitHub (${res.status}): ${detalle}`);
+  }
+}
+
+async function githubDescargarFoto(rutaArchivo) {
+  const url = `${GITHUB_API_BASE}/repos/${GITHUB_REPO}/contents/${encodeURIComponent(rutaArchivo)}?ref=${GITHUB_RAMA}`;
+  const res = await fetch(url, { headers: { 'Authorization': `Bearer ${GITHUB_TOKEN}`, 'Accept': 'application/vnd.github+json' } });
+  if (res.status === 404) return null;
+  if (!res.ok) {
+    const detalle = await res.text().catch(() => '');
+    throw new Error(`No se pudo descargar la foto de GitHub (${res.status}): ${detalle}`);
+  }
+  const data = await res.json();
+  return Buffer.from(data.content, 'base64');
+}
+
+async function githubEliminarFoto(rutaArchivo) {
+  if (!GITHUB_TOKEN || !GITHUB_REPO) return;
+  const urlInfo = `${GITHUB_API_BASE}/repos/${GITHUB_REPO}/contents/${encodeURIComponent(rutaArchivo)}?ref=${GITHUB_RAMA}`;
+  try {
+    const resInfo = await fetch(urlInfo, { headers: { 'Authorization': `Bearer ${GITHUB_TOKEN}`, 'Accept': 'application/vnd.github+json' } });
+    if (!resInfo.ok) return;
+    const info = await resInfo.json();
+    const url = `${GITHUB_API_BASE}/repos/${GITHUB_REPO}/contents/${encodeURIComponent(rutaArchivo)}`;
+    await fetch(url, {
+      method: 'DELETE',
+      headers: { 'Authorization': `Bearer ${GITHUB_TOKEN}`, 'Accept': 'application/vnd.github+json', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: `Foto eliminada — ${new Date().toISOString()}`, sha: info.sha, branch: GITHUB_RAMA })
+    });
+  } catch (err) {
+    console.log('⚠️ No se pudo eliminar la foto en GitHub:', err.message);
   }
 }
 const ARCHIVO_INTEGRANTES = path.join(__dirname, 'integrantes.json');
@@ -857,20 +942,23 @@ function agregarIntegrante(datos) {
     guardarIntegrantes();
     return { actualizado: true, ficha: existente };
   }
-  const ficha = { ...datos, codigo: generarCodigoUnico(), fecha: new Date().toISOString() };
+  const ficha = { ...datos, codigo: generarCodigoUnico(), tieneFoto: false, fecha: new Date().toISOString() };
   lista.push(ficha);
   guardarIntegrantes();
   return { actualizado: false, ficha };
 }
 
+// ── Al quitar una integrante, si tenía foto guardada en GitHub, se elimina también ──
 function quitarIntegrante(criterio) {
   const lista = integrantesClan[CLAVE_CLAN_GLOBAL] || [];
   const criterioLimpio = extraerNumero(criterio) || criterio;
   const criterioCodigo = String(criterio).trim().padStart(2, '0');
   const indice = lista.findIndex(i => i.idFF === criterio || extraerNumero(i.numero) === criterioLimpio || i.codigo === criterioCodigo);
   if (indice === -1) return false;
+  const eliminada = lista[indice];
   lista.splice(indice, 1);
   guardarIntegrantes();
+  if (eliminada.tieneFoto) githubEliminarFoto(rutaFotoIntegrante(eliminada.codigo)).catch(() => {});
   return true;
 }
 
@@ -882,8 +970,6 @@ function buscarIntegrantePorDato(criterio) {
   return lista.find(i => i.idFF === criterio || extraerNumero(i.numero) === criterioLimpio || i.codigo === criterioCodigo) || null;
 }
 
-// Búsqueda por NÚMERO exacto — usado por /integrante @usuario (WhatsApp
-// entrega el JID mencionado, del cual sacamos el número real).
 function buscarIntegrantePorNumero(numero) {
   asegurarCodigosClan();
   const lista = integrantesClan[CLAVE_CLAN_GLOBAL] || [];
@@ -891,8 +977,6 @@ function buscarIntegrantePorNumero(numero) {
   return lista.find(i => extraerNumero(i.numero) === numeroLimpio) || null;
 }
 
-// Búsqueda por NOMBRE o APODO (coincidencia parcial, sin distinguir mayúsculas)
-// — usada por "Anzy pásame información de <nombre>".
 function buscarIntegrantesPorNombre(nombreBuscado) {
   asegurarCodigosClan();
   const lista = integrantesClan[CLAVE_CLAN_GLOBAL] || [];
@@ -914,10 +998,9 @@ function obtenerEtiquetaPersona(criterio) {
   return 'Miembro del grupo';
 }
 
+// ── Ficha SIN recuadro, formato limpio con negrita ──────────────────────────
 function formatearFichaIntegrante(ficha) {
-  return `┏━━━━━━━━━━━━━━━━━━━┓
-┃   FICHA DE INTEGRANTE
-┗━━━━━━━━━━━━━━━━━━━┛
+  return `*FICHA DE INTEGRANTE*
 👤 Nombre  : ${ficha.nombre}
 📱 Número  : ${ficha.numero}
 🆔 ID FF   : ${ficha.idFF}
@@ -925,9 +1008,22 @@ function formatearFichaIntegrante(ficha) {
 🔑 Código  : ${ficha.codigo}`;
 }
 
-// ── Ficha corta en línea, usada dentro de las listas paginadas ─────────────
 function formatearFichaCorta(ficha, posicion) {
   return `${posicion}. *${ficha.nombre}* (${ficha.apodo}) — código ${ficha.codigo}\n   📱 ${ficha.numero} · 🆔 ${ficha.idFF}`;
+}
+
+// ── Envía la ficha, y si la integrante tiene foto guardada, la adjunta ─────
+async function enviarFichaCompleta(sock, jidChat, ficha) {
+  const texto = formatearFichaIntegrante(ficha);
+  if (ficha.tieneFoto && GITHUB_TOKEN && GITHUB_REPO) {
+    try {
+      const buffer = await githubDescargarFoto(rutaFotoIntegrante(ficha.codigo));
+      if (buffer) { await sock.sendMessage(jidChat, { image: buffer, caption: texto }); return; }
+    } catch (err) {
+      console.log('⚠️ No se pudo descargar la foto de este integrante:', err.message);
+    }
+  }
+  await sock.sendMessage(jidChat, { text: texto });
 }
 
 function totalPaginasClan() {
@@ -935,18 +1031,15 @@ function totalPaginasClan() {
   return Math.max(1, Math.ceil(total / INTEGRANTES_POR_PAGINA));
 }
 
-// ── Resumen — reemplaza el volcado completo que antes hacía /integrantes ──
 function generarResumenClan() {
   asegurarCodigosClan();
   const lista = integrantesClan[CLAVE_CLAN_GLOBAL] || [];
   if (!lista.length) return '📋 Aún no hay integrantes registradas en el clan.';
   const paginas = totalPaginasClan();
   const listaComandos = Array.from({ length: paginas }, (_, i) => `/lista ${String(i + 1).padStart(2, '0')}`).join('\n');
-  return `╔═══════════════════════╗\n   CLAN · ${lista.length} INTEGRANTE(S)\n╚═══════════════════════╝\n\nLa lista está dividida en bloques de ${INTEGRANTES_POR_PAGINA} para que no tengas que desplazarte tanto.\n\nEscribe cualquiera de estos comandos para verla:\n${listaComandos}`;
+  return `*CLAN · ${lista.length} INTEGRANTE(S)*\n\nLa lista está dividida en bloques de ${INTEGRANTES_POR_PAGINA} para que no tengas que desplazarte tanto. En cuanto se llene una página, la siguiente aparece sola — no hace falta crearla.\n\nEscribe cualquiera de estos comandos para verla:\n${listaComandos}`;
 }
 
-// ── Página específica — /lista 01, /lista 02, etc. Sin errores: si la
-// página no existe, se avisa cuántas hay disponibles en vez de fallar.
 function generarTextoPaginaClan(numeroPaginaTexto) {
   asegurarCodigosClan();
   const lista = integrantesClan[CLAVE_CLAN_GLOBAL] || [];
@@ -965,7 +1058,7 @@ function generarTextoPaginaClan(numeroPaginaTexto) {
   const inicio = (numeroPagina - 1) * INTEGRANTES_POR_PAGINA;
   const bloque = lista.slice(inicio, inicio + INTEGRANTES_POR_PAGINA);
   const cuerpo = bloque.map((ficha, i) => formatearFichaCorta(ficha, inicio + i + 1)).join('\n\n');
-  return `╔═══════════════════════╗\n  CLAN · PÁGINA ${String(numeroPagina).padStart(2, '0')} DE ${String(paginas).padStart(2, '0')}\n╚═══════════════════════╝\n\n${cuerpo}`;
+  return `*CLAN · PÁGINA ${String(numeroPagina).padStart(2, '0')} DE ${String(paginas).padStart(2, '0')}*\n\n${cuerpo}`;
 }
 
 async function comandoClanAgregar(sock, jidChat, jidUsuario, textoCompleto) {
@@ -990,14 +1083,14 @@ async function comandoClanQuitar(sock, jidChat, jidUsuario, criterio) {
   }
   if (!criterio) { await sock.sendMessage(jidChat, { text: 'Uso: /clan quitar <número, ID FF o código>' }); return; }
   const ok = quitarIntegrante(criterio);
-  await sock.sendMessage(jidChat, { text: ok ? '🗑️ Integrante eliminada de la lista.' : 'No encontré a nadie con ese dato.' });
+  await sock.sendMessage(jidChat, { text: ok ? '🗑️ Integrante eliminada de la lista (incluyendo su foto, si tenía).' : 'No encontré a nadie con ese dato.' });
 }
 
 async function comandoClanVer(sock, jidChat, criterio) {
   if (!criterio) { await sock.sendMessage(jidChat, { text: 'Uso: /clan ver <número, ID FF o código>' }); return; }
   const ficha = buscarIntegrantePorDato(criterio);
   if (!ficha) { await sock.sendMessage(jidChat, { text: 'No encontré a nadie con ese dato.' }); return; }
-  await sock.sendMessage(jidChat, { text: formatearFichaIntegrante(ficha) });
+  await enviarFichaCompleta(sock, jidChat, ficha);
 }
 
 async function comandoEliminarPorCodigo(sock, jidChat, jidUsuario, codigo) {
@@ -1019,10 +1112,11 @@ async function comandoEliminarPorCodigo(sock, jidChat, jidUsuario, codigo) {
   }
   const [eliminada] = lista.splice(indice, 1);
   guardarIntegrantes();
+  if (eliminada.tieneFoto) githubEliminarFoto(rutaFotoIntegrante(eliminada.codigo)).catch(() => {});
   await sock.sendMessage(jidChat, { text: `🗑️ Eliminada del clan: *${eliminada.apodo || eliminada.nombre}* (código ${codigoNormalizado}). Las demás integrantes no fueron afectadas.` });
 }
 
-// ── /integrante @usuario — busca por el número de la mención ───────────────
+// ── /integrante @usuario — ahora resuelve el número REAL con el grupo ──────
 async function comandoIntegrantePorMencion(sock, jidChat, jidUsuario, mencionados) {
   if (!(await tienePermisoClan(sock, jidChat, jidUsuario))) {
     await sock.sendMessage(jidChat, { text: 'Solo las admins o el propietario pueden ver fichas del clan 🚫' });
@@ -1032,13 +1126,46 @@ async function comandoIntegrantePorMencion(sock, jidChat, jidUsuario, mencionado
     await sock.sendMessage(jidChat, { text: 'Menciona a quién buscar: /integrante @usuario' });
     return;
   }
-  const numero = extraerNumero(mencionados[0]);
+  const numero = await resolverNumeroReal(sock, jidChat, mencionados[0]);
   const ficha = buscarIntegrantePorNumero(numero);
   if (!ficha) {
     await sock.sendMessage(jidChat, { text: `No encontré a +${numero} en el clan. Usa /integrantes para revisar quiénes están registradas.` });
     return;
   }
-  await sock.sendMessage(jidChat, { text: formatearFichaIntegrante(ficha) });
+  await enviarFichaCompleta(sock, jidChat, ficha);
+}
+
+// ── /fotoff <código> — guarda o reemplaza la foto de una integrante ────────
+async function comandoFotoIntegrante(sock, jidChat, jidUsuario, msg, codigoTexto) {
+  if (!(await tienePermisoClan(sock, jidChat, jidUsuario))) {
+    await sock.sendMessage(jidChat, { text: 'Solo las admins o el propietario pueden subir fotos al clan 🚫' });
+    return;
+  }
+  if (!GITHUB_TOKEN || !GITHUB_REPO) {
+    await sock.sendMessage(jidChat, { text: 'No puedo guardar fotos todavía — falta configurar GITHUB_TOKEN y GITHUB_REPO en Render.' });
+    return;
+  }
+  const codigoNormalizado = (codigoTexto || '').trim().padStart(2, '0');
+  const lista = integrantesClan[CLAVE_CLAN_GLOBAL] || [];
+  const ficha = lista.find(i => i.codigo === codigoNormalizado);
+  if (!ficha) {
+    await sock.sendMessage(jidChat, { text: `No encontré a nadie con el código ${codigoNormalizado}. Revisa con /integrantes.` });
+    return;
+  }
+  if (!msg.message.imageMessage) {
+    await sock.sendMessage(jidChat, { text: `Adjunta la imagen y pon como descripción: /fotoff ${codigoNormalizado}` });
+    return;
+  }
+  try {
+    const buffer = await downloadMediaMessage(msg, 'buffer', {}, { logger: pino({ level: 'error' }) });
+    await githubSubirFoto(rutaFotoIntegrante(ficha.codigo), buffer);
+    ficha.tieneFoto = true;
+    guardarIntegrantes();
+    await sock.sendMessage(jidChat, { text: `📸 Foto guardada para *${ficha.apodo || ficha.nombre}* (código ${ficha.codigo}).` });
+  } catch (err) {
+    console.log('❌ Error subiendo foto de integrante:', err.message);
+    await sock.sendMessage(jidChat, { text: 'No pude guardar la foto, intenta de nuevo en un momento 💔' });
+  }
 }
 
 const borradoresIntegrante = new Map();
@@ -1078,7 +1205,7 @@ async function comandoCampoIntegrante(sock, jidChat, jidUsuario, campo, valor) {
   }
 }
 
-async function manejarComandosClanUniversal(sock, jidChat, jidUsuario, texto, mencionados) {
+async function manejarComandosClanUniversal(sock, jidChat, jidUsuario, texto, mencionados, msg) {
   const matchNombre = texto.match(/^\/nombreff\s+(.+)/i);
   if (matchNombre) { await comandoCampoIntegrante(sock, jidChat, jidUsuario, 'nombre', matchNombre[1].trim()); return true; }
   const matchNumero = texto.match(/^\/numeroff\s+(.+)/i);
@@ -1087,6 +1214,12 @@ async function manejarComandosClanUniversal(sock, jidChat, jidUsuario, texto, me
   if (matchIdFF) { await comandoCampoIntegrante(sock, jidChat, jidUsuario, 'idFF', matchIdFF[1].trim()); return true; }
   const matchApodo = texto.match(/^\/apodoff\s+(.+)/i);
   if (matchApodo) { await comandoCampoIntegrante(sock, jidChat, jidUsuario, 'apodo', matchApodo[1].trim()); return true; }
+
+  if (PATRON_COMANDO_FOTOFF.test(texto)) {
+    const m = texto.match(PATRON_COMANDO_FOTOFF);
+    await comandoFotoIntegrante(sock, jidChat, jidUsuario, msg, m[1]);
+    return true;
+  }
 
   const partesTexto = texto.trim().split(/\s+/);
   const comando = (partesTexto[0] || '').toLowerCase();
@@ -1131,7 +1264,7 @@ function formatearMovimiento(jidGrupo, r) {
   const fecha = new Date(r.fecha).toLocaleString('es-PE', { timeZone: 'America/Lima', day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
   const numeroEjecutor = r.ejecutor;
   const nombreEjecutor = numeroEjecutor ? obtenerEtiquetaPersona(numeroEjecutor) : 'Desconocido';
-  let cuerpo = `┌─────────────────────┐\n│ ${info.icono}  MOVIMIENTO DE GRUPO\n└─────────────────────┘\n\n👥 *Grupo:* ${r.nombreGrupo || 'Sin nombre registrado'}\n👤 *Realizado por:* ${nombreEjecutor}${numeroEjecutor ? ` (+${numeroEjecutor})` : ''}\n📌 *Acción:* ${info.texto}`;
+  let cuerpo = `*MOVIMIENTO DE GRUPO* ${info.icono}\n\n👥 *Grupo:* ${r.nombreGrupo || 'Sin nombre registrado'}\n👤 *Realizado por:* ${nombreEjecutor}${numeroEjecutor ? ` (+${numeroEjecutor})` : ''}\n📌 *Acción:* ${info.texto}`;
   if (r.objetivos && r.objetivos.length) {
     const detalles = r.objetivos.map(n => `${obtenerEtiquetaPersona(n)} (+${n})`).join(', ');
     cuerpo += `\n🎯 *Afectado(s):* ${detalles}`;
@@ -1153,7 +1286,7 @@ async function comandoMovimientos(sock, jidGrupo, jidUsuario, argumentoTexto) {
     return;
   }
   const cuerpo = registros.map(r => formatearMovimiento(jidGrupo, r)).join('\n\n');
-  await sock.sendMessage(jidGrupo, { text: `╔═══════════════════════╗\n  ÚLTIMOS MOVIMIENTOS\n╚═══════════════════════╝\n\n${cuerpo}` });
+  await sock.sendMessage(jidGrupo, { text: `*ÚLTIMOS MOVIMIENTOS*\n\n${cuerpo}` });
 }
 async function comandoPromoverDegradar(sock, jidGrupo, jidUsuario, mencionados, accion) {
   if (!(await esAdminGrupo(sock, jidGrupo, jidUsuario))) {
@@ -1371,7 +1504,7 @@ async function procesarMensajeGrupo(sock, msg, identificadoresBot) {
   const jidGrupo = msg.key.remoteJid;
   const jidUsuario = msg.key.participant || msg.key.remoteJid;
   const nombreContacto = msg.pushName || 'amiga';
-  const texto = (msg.message.conversation || msg.message.extendedTextMessage?.text || '').trim();
+  const texto = obtenerTextoMensaje(msg);
   if (!texto) return;
 
   if (esNumeroIgnorado(jidUsuario)) return;
@@ -1413,7 +1546,7 @@ async function procesarMensajeGrupo(sock, msg, identificadoresBot) {
 
   const mencionados = msg.message.extendedTextMessage?.contextInfo?.mentionedJid || [];
 
-  if (await manejarComandosClanUniversal(sock, jidGrupo, jidUsuario, texto, mencionados)) return;
+  if (await manejarComandosClanUniversal(sock, jidGrupo, jidUsuario, texto, mencionados, msg)) return;
 
   try {
     const manejado = await manejarComandosGenerales(sock, jidGrupo, jidUsuario, texto, mencionados, true, clavePendientePropietario);
@@ -1429,26 +1562,37 @@ async function procesarMensajeGrupo(sock, msg, identificadoresBot) {
     try { await sock.sendMessage(JID_DUEÑO, { text: `🚨 Alerta: ${nombreContacto} en grupo escribió algo que parece señal de crisis: "${texto}"` }); } catch (err) {}
   }
 
-  // ── Antes de gastar cuota de IA: ¿está pidiendo info de alguien del clan por nombre? ──
   const consultaSinMencion = texto.replace(/@\d+/g, '').replace(/^\/\S*\s*/, '').trim() || texto;
+
+  // ── 1) Si mencionó a alguien Y pidió info/foto de esa persona, usamos la
+  // mención (más confiable que el nombre en texto) ────────────────────────
+  if (mencionados.length && /\b(informaci[oó]n|informe|info|datos|ficha|perfil|foto)\b/i.test(consultaSinMencion)) {
+    if (await tienePermisoClan(sock, jidGrupo, jidUsuario)) {
+      const numero = await resolverNumeroReal(sock, jidGrupo, mencionados[0]);
+      const ficha = buscarIntegrantePorNumero(numero);
+      if (ficha) { await enviarFichaCompleta(sock, jidGrupo, ficha); return; }
+    }
+  }
+
+  // ── 2) Si no hubo mención pero el texto parece pedir la ficha de alguien
+  // por nombre, buscamos en el clan. Si no hay coincidencias, seguimos de
+  // largo hacia la IA normal — así nunca bloqueamos una charla casual. ────
   const nombreBuscado = detectarSolicitudInfoPorNombre(consultaSinMencion);
   if (nombreBuscado) {
-    if (!(await tienePermisoClan(sock, jidGrupo, jidUsuario))) {
-      await sock.sendMessage(jidGrupo, { text: 'Solo las admins o el propietario pueden ver fichas del clan 🚫' });
-      return;
-    }
     const encontrados = buscarIntegrantesPorNombre(nombreBuscado);
-    if (encontrados.length === 1) {
-      await sock.sendMessage(jidGrupo, { text: formatearFichaIntegrante(encontrados[0]) });
-      return;
-    }
-    if (encontrados.length > 1) {
+    if (encontrados.length > 0) {
+      if (!(await tienePermisoClan(sock, jidGrupo, jidUsuario))) {
+        await sock.sendMessage(jidGrupo, { text: 'Solo las admins o el propietario pueden ver fichas del clan 🚫' });
+        return;
+      }
+      if (encontrados.length === 1) {
+        await enviarFichaCompleta(sock, jidGrupo, encontrados[0]);
+        return;
+      }
       const opciones = encontrados.map(f => `• ${f.nombre} (${f.apodo}) — código ${f.codigo}`).join('\n');
       await sock.sendMessage(jidGrupo, { text: `Encontré varias coincidencias para "${nombreBuscado}":\n\n${opciones}\n\nUsa /clan ver <código> para ver la ficha exacta.` });
       return;
     }
-    await sock.sendMessage(jidGrupo, { text: `No encontré a nadie llamado "${nombreBuscado}" en el clan. Usa /integrantes para revisar la lista.` });
-    return;
   }
 
   try {
@@ -1571,7 +1715,7 @@ async function iniciarBot() {
 
     if (!remitente.endsWith('@g.us')) {
       if (remitente.endsWith('@s.whatsapp.net')) {
-        const textoPersonal = (msg.message.conversation || msg.message.extendedTextMessage?.text || '').trim();
+        const textoPersonal = obtenerTextoMensaje(msg);
         if (esNumeroIgnorado(remitente)) return;
 
         if (pendientesPropietario.has(remitente)) {
@@ -1596,7 +1740,9 @@ async function iniciarBot() {
           return;
         }
 
-        if (await manejarComandosClanUniversal(sock, remitente, remitente, textoPersonal, [])) return;
+        if (!textoPersonal) return;
+
+        if (await manejarComandosClanUniversal(sock, remitente, remitente, textoPersonal, [], msg)) return;
 
         if (esCodigoDueño(textoPersonal)) {
           modoJefe.set(remitente, true);
@@ -1622,22 +1768,20 @@ async function iniciarBot() {
           const consultaSinMencion = textoPersonal.replace(/^\/\S*\s*/, '').trim() || textoPersonal;
           const nombreBuscado = detectarSolicitudInfoPorNombre(consultaSinMencion);
           if (nombreBuscado) {
-            if (!esPropietarioEfectivo(remitente)) {
-              await sock.sendMessage(remitente, { text: 'Solo el propietario puede ver fichas del clan 🚫' });
-              return;
-            }
             const encontrados = buscarIntegrantesPorNombre(nombreBuscado);
-            if (encontrados.length === 1) {
-              await sock.sendMessage(remitente, { text: formatearFichaIntegrante(encontrados[0]) });
-              return;
-            }
-            if (encontrados.length > 1) {
+            if (encontrados.length > 0) {
+              if (!esPropietarioEfectivo(remitente)) {
+                await sock.sendMessage(remitente, { text: 'Solo el propietario puede ver fichas del clan 🚫' });
+                return;
+              }
+              if (encontrados.length === 1) {
+                await enviarFichaCompleta(sock, remitente, encontrados[0]);
+                return;
+              }
               const opciones = encontrados.map(f => `• ${f.nombre} (${f.apodo}) — código ${f.codigo}`).join('\n');
               await sock.sendMessage(remitente, { text: `Encontré varias coincidencias para "${nombreBuscado}":\n\n${opciones}\n\nUsa /clan ver <código> para ver la ficha exacta.` });
               return;
             }
-            await sock.sendMessage(remitente, { text: `No encontré a nadie llamado "${nombreBuscado}" en el clan. Usa /integrantes para revisar la lista.` });
-            return;
           }
 
           try {
@@ -1660,9 +1804,10 @@ async function iniciarBot() {
     if (!botActivo) return;
 
     const tipoMensaje = Object.keys(msg.message)[0];
-    const esSoloMedia = ['imageMessage', 'audioMessage', 'videoMessage', 'stickerMessage'].includes(tipoMensaje)
-      && !(msg.message.conversation || msg.message.extendedTextMessage?.text);
-    if (esSoloMedia) return;
+    const tieneTexto = !!(msg.message.conversation || msg.message.extendedTextMessage?.text || msg.message.imageMessage?.caption);
+    const esSoloMedia = ['audioMessage', 'videoMessage', 'stickerMessage'].includes(tipoMensaje) && !tieneTexto;
+    const esImagenSinTexto = tipoMensaje === 'imageMessage' && !tieneTexto;
+    if (esSoloMedia || esImagenSinTexto) return;
 
     estado.mensajesRecibidos++;
     try {
@@ -1690,7 +1835,7 @@ const LISTA_COMANDOS_PANEL = [
   { cat: '🧠 Inteligencia Artificial', items: [
     ['/anzy <pregunta>', 'Pregúntale a la IA'],
     ['@bot <pregunta>', 'Mencionando al bot'],
-    ['Anzy pásame información de <nombre>', 'Busca a alguien del clan por nombre']
+    ['Anzy información de <nombre>', 'Busca a alguien del clan por nombre (foto incluida si tiene)']
   ]},
   { cat: '🎭 Modos de personalidad', items: [
     ['/novia on · /novia off', 'Modo cariñoso y coqueto'],
@@ -1720,9 +1865,10 @@ const LISTA_COMANDOS_PANEL = [
     ['/numeroff <número>', 'Guarda el número'],
     ['/idff <ID>', 'Guarda el ID FF'],
     ['/apodoff <apodo>', 'Guarda el apodo (al completar los 4, se guarda solo)'],
+    ['/fotoff <código>', 'Adjunta una imagen con esta descripción para guardarle foto'],
     ['/clan ver <código o número>', 'Ver una ficha'],
     ['/clan quitar <código o número>', 'Eliminar una ficha'],
-    ['/eliminar <código de 2 cifras>', 'Elimina a una integrante sin afectar a las demás'],
+    ['/eliminar <código de 2 cifras>', 'Elimina a una integrante (y su foto) sin afectar a las demás'],
     ['/integrantes', 'Resumen y cuántas páginas hay'],
     ['/lista 01 · /lista 02 · etc', 'Ver el clan en bloques de 10'],
     ['/integrante @user', 'Ficha de esa persona (si ya está en el clan)']
