@@ -15,6 +15,8 @@ const crypto = require('crypto');
 let MODULO_TAREA = null;
 let MODULO_HOJA = null;
 try { MODULO_TAREA = require('./lib/tarea'); } catch (err) { console.log('⚠️ lib/tarea.js no disponible — visión de tareas desactivada:', err.message); }
+let MODULO_VOZ = null;
+try { MODULO_VOZ = require('./lib/voz'); } catch (err) { console.log('⚠️ lib/voz.js no disponible — voz desactivada:', err.message); }
 try { MODULO_HOJA = require('./lib/hoja'); } catch (err) { console.log('⚠️ lib/hoja.js no disponible — hojas en imagen desactivadas:', err.message); }
 // Hora REAL de inicio del proceso (no la hora en que se cargó este archivo).
 const INICIO_PROCESO_MS = Date.now() - Math.round(process.uptime() * 1000);
@@ -376,6 +378,7 @@ function sanitizarParaLog(texto) {
   return String(texto == null ? '' : texto)
     .replace(/AIza[0-9A-Za-z_\-]{20,}/g, '[clave]')
     .replace(/\bgh[pousr]_[0-9A-Za-z]{20,}/g, '[token]')
+    .replace(/\bsk_[0-9a-zA-Z]{16,}/g, '[clave]')
     .replace(/(Bearer\s+)[A-Za-z0-9._\-]{10,}/gi, '$1[token]')
     .replace(/([?&](?:key|clave|token|api_key|apikey|x-goog-api-key)=)[^&\s"']+/gi, '$1[oculto]')
     .replace(/\s+/g, ' ')
@@ -388,6 +391,10 @@ function clasificarError(err) {
   const estadoHttp = Number((err && (err.status || err.statusCode)) || 0);
   const codigo = err && err.codigo;
   const t = (re) => re.test(mensaje);
+  if (err && err.categoriaVoz) {
+    const cv = err.categoriaVoz;
+    return { categoria: `voz_${cv}`, tipo: ['autenticacion', 'plan', 'voz_no_encontrada', 'sin_clave', 'ffmpeg'].includes(cv) ? 'configuracion' : (['cuota', 'timeout', 'servidor', 'red', 'limite_ritmo'].includes(cv) ? 'temporal' : 'entrada') };
+  }
   if (codigo === 'TIMEOUT' || t(/timed? ?out|ETIMEDOUT|ESOCKETTIMEDOUT|tiempo de espera/i)) return { categoria: 'timeout', tipo: 'temporal' };
   if (estadoHttp === 429 || t(/\b429\b|RESOURCE_EXHAUSTED|quota|rate.?limit|daily free allocation/i)) return { categoria: 'cuota', tipo: 'temporal' };
   if (estadoHttp === 401 || estadoHttp === 403 || t(/\b40[13]\b|API key|API_KEY_INVALID|PERMISSION_DENIED|UNAUTHENTICATED/i)) return { categoria: 'autenticacion', tipo: 'configuracion' };
@@ -440,6 +447,7 @@ function generarResumenDiagnostico() {
   lineas.push(`🤖 IA: ${CLIENTES_IA.length} cliente(s) configurado(s) (${CLIENTES_IA.map(c => c.nombre).join(', ') || 'ninguno'}) · modelo: ${MODELO_PRINCIPAL}`);
   lineas.push(`📊 Cuota estimada hoy: ${contadorCuota.usados}/${LIMITE_DIARIO_ESTIMADO}`);
   lineas.push(`🟢 Bot activo: ${botActivo ? 'sí' : 'no'}`);
+  lineas.push(`🔊 Voz: ${(VOZ && VOZ.cliente.configurado()) ? `ElevenLabs (${VOZ.cliente.modelo()}) · ${estadoVoz.audios} audio(s), ≈${estadoVoz.caracteres} caracteres este mes · ${estadoVoz.ffmpegOpus === false ? 'sin Opus (audio mp3)' : 'notas de voz Ogg/Opus'}${Date.now() < estadoVoz.bloqueadoHasta ? ' · en pausa: ' + estadoVoz.motivoBloqueo : ''}` : 'sin configurar'}`);
   if (ESTADISTICAS_LATENCIA.size) {
     lineas.push('', '⏳ *Tiempos de respuesta* (promedio · máx · último):');
     for (const [fn, e] of ESTADISTICAS_LATENCIA) lineas.push(`• ${fn}: ${Math.round(e.totalMs / e.n)} ms · ${e.maxMs} ms · ${e.ultimoMs} ms (${e.ok} ok / ${e.fallos} fallos)`);
@@ -459,6 +467,9 @@ function generarResumenDiagnostico() {
   if (cuenta('autenticacion')) notas.push('Se detectaron errores de autenticación (configuración): revisa las claves CLAVE_IA_*.');
   if (cuenta('modelo_no_disponible')) notas.push('Se detectó un modelo no disponible (configuración): revisa el identificador del modelo.');
   if (cuenta('cuota')) notas.push('Se detectó cuota agotada (temporal): se renueva sola; si se repite todos los días, revisa el plan. Recuerda que el límite es por proyecto de Google, no por clave.');
+  if (cuenta('voz_cuota')) notas.push('Se agotó el crédito de voz de ElevenLabs (temporal): se renueva cada mes.');
+  if (cuenta('voz_plan') || cuenta('voz_autenticacion') || cuenta('voz_voz_no_encontrada') || cuenta('voz_sin_clave')) notas.push('La voz tiene un problema de configuración: revisa ELEVENLABS_API_KEY y ELEVENLABS_VOICE_ID (en el plan gratis solo se pueden usar algunas voces).');
+  if (cuenta('voz_ffmpeg')) notas.push('ffmpeg no pudo convertir el audio a Opus: las respuestas salen como audio mp3.');
   if (cuenta('timeout')) notas.push('Hubo respuestas que superaron el tiempo límite (temporal).');
   if (cuenta('servidor_o_red')) notas.push('Hubo caídas o errores de red del servicio (temporal).');
   if (cuenta('conexion_whatsapp') || ultimos.some(e => e.funcion === 'conexion_whatsapp')) notas.push('Hubo desconexiones de WhatsApp: revisa los logs de Render si persisten.');
@@ -1177,8 +1188,311 @@ async function manejarHerramientasNaturales(sock, { jidChat, jidUsuario, consult
   if (propietario && RE_HERR_PROBAR_IA.test(t)) { await ejecutarPruebaIA(sock, jidChat); return true; }
   if (propietario && RE_HERR_ANALIZAR.test(t)) { await sock.sendMessage(jidChat, { text: generarResumenDiagnostico() }); return true; }
   if (propietario && RE_HERR_RESET_ESTILO.test(t)) { estiloGlobalExtra = ''; await sock.sendMessage(jidChat, { text: '✅ Restablecí el estilo de respuestas a mi forma original.' }); return true; }
+  if (propietario && !esGrupo && MODULO_VOZ && await manejarHerramientasVoz(sock, jidChat, t, extraerNumero(jidUsuario))) return true;
   const m = t.match(RE_GENERAR_IMAGEN);
   if (m) { await comandoImagen(sock, jidChat, m[1].trim()); return true; }
+  return false;
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 🆕 v3.5.0 — VOZ HUMANIZADA CON ELEVENLABS (solo el chat privado del propietario)
+// ═══════════════════════════════════════════════════════════════════════════
+// • Modo texto (predeterminado): los mensajes escritos se responden por texto.
+// • Modo voz: se activa/desactiva con lenguaje natural ("quiero escucharte", "vuelve a escribirme").
+// • Notas de voz del propietario: SIEMPRE se responden con audio, aunque el modo sea texto.
+// • La IA decide QUÉ responder; ElevenLabs solo lo convierte en voz. Si algo falla, se responde por texto.
+const VOZ = MODULO_VOZ ? {
+  cliente: MODULO_VOZ.crearClienteElevenLabs({ log: (m) => console.log(`🔊 [Voz] ${m}`) }),
+  cola: MODULO_VOZ.crearColaPorClave(),
+  cache: MODULO_VOZ.crearCacheAudio(),
+  limitador: crearLimitador(2)
+} : null;
+const CHAT_PRIVADO_LIBRE = (process.env.CHAT_PRIVADO_LIBRE || 'true').toLowerCase() !== 'false';
+const VOZ_MAX_CARACTERES = Math.min(5000, Math.max(200, parseInt(process.env.VOZ_MAX_CARACTERES, 10) || 1200));
+const VOZ_LIMITE_CARACTERES_MES = parseInt(process.env.VOZ_LIMITE_CARACTERES_MES, 10) || 9000;
+const ARCHIVO_VOZ_PREFS = path.join(__dirname, 'voz_preferencias.json');
+const ARCHIVO_VOZ_USO = path.join(__dirname, 'voz_uso.json');
+const GITHUB_RUTA_VOZ = limpiarValorEnv(process.env.GITHUB_RUTA_VOZ) || 'voz_preferencias.json';
+const GITHUB_RAMA_VOZ = limpiarValorEnv(process.env.GITHUB_RAMA_VOZ);
+const DURACION_MAXIMA_NOTA_VOZ_SEGUNDOS = 360;
+const MAX_BYTES_AUDIO = 15 * 1024 * 1024;
+
+const NOTA_MODO_VOZ = `\n\nMODO VOZ: tu respuesta se convertirá en audio y la oirás hablada. Habla como en una conversación real: frases cortas y naturales, unas 4 o 5 frases como máximo (unos 600 caracteres), sin listas, sin markdown, sin emojis, sin enlaces ni paréntesis. Escribe los números y símbolos como se pronuncian si hace falta. No digas que es un audio.`;
+
+const estadoVoz = { bloqueadoHasta: 0, motivoBloqueo: '', avisoBloqueoEnviado: false, ffmpegOpus: null, vozAlternativa: null, mes: '', caracteres: 0, audios: 0, fallos: 0 };
+const idsAudioProcesados = new Set();
+
+// ── Preferencias persistentes (local + GitHub, el mismo mecanismo que usas para propietarios) ──
+let prefsVoz = { version: 1, usuarios: {} };
+let shaVozGithub = null;
+let guardadoVozPendiente = null;
+
+function cargarPrefsVozLocal() {
+  try { const d = JSON.parse(fs.readFileSync(ARCHIVO_VOZ_PREFS, 'utf-8')); if (d && typeof d.usuarios === 'object') prefsVoz = { version: 1, usuarios: d.usuarios }; } catch { /* primera vez */ }
+  try { const u = JSON.parse(fs.readFileSync(ARCHIVO_VOZ_USO, 'utf-8')); if (u && u.mes === mesActualVoz()) { estadoVoz.mes = u.mes; estadoVoz.caracteres = u.caracteres || 0; estadoVoz.audios = u.audios || 0; } } catch { /* sin datos */ }
+}
+function guardarPrefsVozLocal() { try { fs.writeFileSync(ARCHIVO_VOZ_PREFS, JSON.stringify(prefsVoz, null, 2)); } catch (err) { console.log('⚠️ No se pudo guardar voz_preferencias.json:', err.message); } }
+function mesActualVoz() { return new Date().toISOString().slice(0, 7); }
+function registrarUsoVoz(caracteres) {
+  const mes = mesActualVoz();
+  if (estadoVoz.mes !== mes) { estadoVoz.mes = mes; estadoVoz.caracteres = 0; estadoVoz.audios = 0; }
+  estadoVoz.caracteres += caracteres; estadoVoz.audios++;
+  try { fs.writeFileSync(ARCHIVO_VOZ_USO, JSON.stringify({ mes: estadoVoz.mes, caracteres: estadoVoz.caracteres, audios: estadoVoz.audios })); } catch { /* el uso local es solo orientativo */ }
+}
+function obtenerPrefVoz(numero) { return (prefsVoz.usuarios[numero]) || { modo: 'texto' }; }
+function establecerPrefVoz(numero, cambios) {
+  prefsVoz.usuarios[numero] = { ...obtenerPrefVoz(numero), ...cambios, actualizado: new Date().toISOString() };
+  guardarPrefsVozLocal();
+  programarGuardadoVozNube();
+}
+
+function cabecerasGithub() { return { 'Authorization': `Bearer ${GITHUB_TOKEN}`, 'Accept': 'application/vnd.github+json' }; }
+function ramaVoz() { return GITHUB_RAMA_VOZ || GITHUB_RAMA; }
+async function githubLeerPrefsVoz() {
+  const res = await fetch(`${GITHUB_API_BASE}/repos/${GITHUB_REPO}/contents/${encodeURIComponent(GITHUB_RUTA_VOZ)}?ref=${ramaVoz()}`, { headers: cabecerasGithub() });
+  if (res.status === 404) { shaVozGithub = null; return null; }
+  if (!res.ok) throw new Error(`No se pudo leer las preferencias de voz de GitHub (${res.status})`);
+  const data = await res.json();
+  shaVozGithub = data.sha;
+  return JSON.parse(Buffer.from(data.content, 'base64').toString('utf-8'));
+}
+async function githubGuardarPrefsVoz(reintento = false) {
+  const url = `${GITHUB_API_BASE}/repos/${GITHUB_REPO}/contents/${encodeURIComponent(GITHUB_RUTA_VOZ)}`;
+  const body = { message: `Preferencias de voz — ${new Date().toISOString()}`, content: Buffer.from(JSON.stringify(prefsVoz, null, 2)).toString('base64'), branch: ramaVoz() };
+  if (shaVozGithub) body.sha = shaVozGithub;
+  const res = await fetch(url, { method: 'PUT', headers: { ...cabecerasGithub(), 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  if ((res.status === 409 || res.status === 422) && !reintento) { await githubLeerPrefsVoz(); return githubGuardarPrefsVoz(true); }
+  if (!res.ok) throw new Error(`No se pudieron guardar las preferencias de voz en GitHub (${res.status})`);
+  shaVozGithub = (await res.json()).content.sha;
+}
+function programarGuardadoVozNube() {
+  if (!GITHUB_TOKEN || !GITHUB_REPO) return;
+  if (guardadoVozPendiente) clearTimeout(guardadoVozPendiente);
+  guardadoVozPendiente = setTimeout(async () => {
+    guardadoVozPendiente = null;
+    try { await githubGuardarPrefsVoz(); console.log('☁️ Preferencias de voz guardadas en GitHub.'); }
+    catch (err) { registrarEventoDiag('voz_prefs_github', err); console.log('⚠️', sanitizarParaLog(err.message)); }
+  }, 2000);
+}
+
+function verificarFfmpegOpus() {
+  return new Promise((resolve) => {
+    require('child_process').execFile(RUTA_FFMPEG_BIN, ['-hide_banner', '-encoders'], { timeout: 15000 }, (err, stdout) => {
+      estadoVoz.ffmpegOpus = !err && /libopus/.test(String(stdout));
+      console.log(estadoVoz.ffmpegOpus ? '🔊 ffmpeg con libopus disponible: las respuestas se enviarán como notas de voz.' : `⚠️ ffmpeg/libopus NO disponible${err ? ` (${sanitizarParaLog(err.message)})` : ''}: las respuestas de voz se enviarán como audio normal (mp3), no como nota de voz.`);
+      resolve(estadoVoz.ffmpegOpus);
+    });
+  });
+}
+
+async function inicializarVoz() {
+  if (!VOZ) { console.log('⚠️ lib/voz.js no disponible — la voz está desactivada.'); return; }
+  cargarPrefsVozLocal();
+  if (!VOZ.cliente.configurado()) console.log('⚠️ ELEVENLABS_API_KEY no está definida: el modo voz está desactivado (el resto del bot funciona igual).');
+  else console.log(`🔊 Voz lista: modelo ${VOZ.cliente.modelo()} · voz ${process.env.ELEVENLABS_VOICE_ID ? 'configurada en ELEVENLABS_VOICE_ID' : 'predeterminada (premade)'} · límite local ${VOZ_LIMITE_CARACTERES_MES} caracteres/mes.`);
+  if (GITHUB_TOKEN && GITHUB_REPO) {
+    try {
+      const nube = await githubLeerPrefsVoz();
+      if (nube && typeof nube.usuarios === 'object') { prefsVoz = { version: 1, usuarios: nube.usuarios }; guardarPrefsVozLocal(); console.log('☁️ Preferencias de voz cargadas desde GitHub.'); }
+      else if (Object.keys(prefsVoz.usuarios).length) await githubGuardarPrefsVoz();
+    } catch (err) { console.log('⚠️ No se pudo sincronizar las preferencias de voz con GitHub:', sanitizarParaLog(err.message)); }
+  } else console.log('⚠️ Sin GitHub configurado: el modo voz elegido se perderá cuando Render reinicie el servicio.');
+  if (VOZ.cliente.configurado()) await verificarFfmpegOpus();
+}
+
+// ── Generación y envío ──────────────────────────────────────────────────────
+async function elegirVozAlternativa(excluir) {
+  try {
+    const voces = await VOZ.cliente.listarVoces();
+    const candidatas = voces.filter(v => v.id !== excluir && (v.genero || '').toLowerCase() === 'female' && /premade|generated/i.test(v.categoria || 'premade'));
+    return (candidatas.find(v => v.espanol) || candidatas[0] || {}).id || null;
+  } catch (err) { registrarEventoDiag('voz_listar', err); return null; }
+}
+
+function marcarBloqueoVoz(minutos, motivo) { estadoVoz.bloqueadoHasta = Date.now() + minutos * 60000; estadoVoz.motivoBloqueo = motivo; estadoVoz.avisoBloqueoEnviado = false; }
+
+// Devuelve { buffer, mimetype, ptt, caracteres } o lanza un error clasificado.
+async function sintetizarParaWhatsApp(textoHablado, numero) {
+  const preferida = (obtenerPrefVoz(numero).voiceId) || estadoVoz.vozAlternativa || undefined;
+  const claveCache = VOZ.cache.clave(preferida || process.env.ELEVENLABS_VOICE_ID || 'defecto', VOZ.cliente.modelo(), textoHablado);
+  let ogg = VOZ.cache.get(claveCache);
+  let mp3 = null;
+  if (!ogg) {
+    const t0 = Date.now();
+    mp3 = await VOZ.limitador(async () => {
+      try { return await VOZ.cliente.sintetizar(textoHablado, { voiceId: preferida }); }
+      catch (err) {
+        if (err.categoriaVoz === 'plan' || err.categoriaVoz === 'voz_no_encontrada') {
+          const alternativa = await elegirVozAlternativa(preferida || process.env.ELEVENLABS_VOICE_ID || MODULO_VOZ.VOZ_PREDETERMINADA);
+          if (!alternativa) throw err;
+          console.log('🔊 [Voz] la voz configurada no está disponible en tu plan; se usa otra voz premade de tu cuenta.');
+          const buffer = await VOZ.cliente.sintetizar(textoHablado, { voiceId: alternativa });
+          estadoVoz.vozAlternativa = alternativa;
+          return buffer;
+        }
+        throw err;
+      }
+    });
+    registrarLatencia('voz_elevenlabs', Date.now() - t0, true);
+    registrarUsoVoz(Math.round(textoHablado.length * (/flash|turbo/i.test(VOZ.cliente.modelo()) ? 0.5 : 1)));
+    if (estadoVoz.ffmpegOpus !== false) {
+      try { ogg = await MODULO_VOZ.convertirMp3AOpus(mp3, RUTA_FFMPEG_BIN); VOZ.cache.set(claveCache, ogg); }
+      catch (err) { registrarEventoDiag('voz_ffmpeg', err); console.log(`⚠️ [Voz] conversión a Opus fallida: ${sanitizarParaLog(err.message)}`); }
+    }
+  }
+  if (ogg) return { buffer: ogg, mimetype: 'audio/ogg; codecs=opus', ptt: true, caracteres: textoHablado.length };
+  // Sin Opus válido NO se envía como nota de voz: se manda como audio normal (mp3 real).
+  return { buffer: mp3, mimetype: 'audio/mpeg', ptt: false, caracteres: textoHablado.length };
+}
+
+// Responde con voz; si algo falla, responde por texto (nunca deja al propietario sin respuesta).
+async function responderConVoz(sock, jid, textoRespuesta, numero) {
+  const comoTexto = async (aviso) => { await enviarRespuestaHumanizada(sock, jid, textoRespuesta, []); if (aviso) await sock.sendMessage(jid, { text: aviso }); return false; };
+  if (!VOZ || !VOZ.cliente.configurado()) return comoTexto('🔇 Aún no tengo configurada la voz (falta ELEVENLABS_API_KEY en Render), así que te respondo por texto.');
+  if (Date.now() < estadoVoz.bloqueadoHasta) {
+    const aviso = estadoVoz.avisoBloqueoEnviado ? null : `🔇 ${estadoVoz.motivoBloqueo} Te respondo por texto por ahora.`;
+    estadoVoz.avisoBloqueoEnviado = true;
+    return comoTexto(aviso);
+  }
+  const hablable = MODULO_VOZ.prepararTextoParaVoz(textoRespuesta);
+  if (!hablable) return comoTexto(null);
+  if (estadoVoz.mes === mesActualVoz() && estadoVoz.caracteres + hablable.length > VOZ_LIMITE_CARACTERES_MES) {
+    marcarBloqueoVoz(360, 'Llegué al límite de voz que configuré para este mes (para cuidar tu plan gratuito).');
+    return comoTexto('🔇 Llegué al límite de voz que configuré para este mes (VOZ_LIMITE_CARACTERES_MES). Te respondo por texto.');
+  }
+  const { hablado, resto } = MODULO_VOZ.recortarParaVoz(hablable, VOZ_MAX_CARACTERES);
+  try {
+    const nota = await VOZ.cola(jid, async () => {
+      sock.sendPresenceUpdate('recording', jid).catch(() => {});
+      const resultado = await sintetizarParaWhatsApp(hablado, numero);
+      await sock.sendMessage(jid, { audio: resultado.buffer, mimetype: resultado.mimetype, ptt: resultado.ptt });
+      return resultado;
+    });
+    sock.sendPresenceUpdate('paused', jid).catch(() => {});
+    console.log(`🔊 [Voz] audio enviado (${nota.ptt ? 'nota de voz Ogg/Opus' : 'audio mp3'}, ${nota.caracteres} caracteres, ${nota.buffer.length} bytes)`);
+    if (resto) await sock.sendMessage(jid, { text: `📝 El resto te lo dejo escrito:\n\n${resto}` });
+    return true;
+  } catch (err) {
+    estadoVoz.fallos++;
+    registrarEventoDiag('voz_elevenlabs', err);
+    console.log(`⚠️ [Voz] fallo (${err.categoriaVoz || 'sin categoría'}): ${sanitizarParaLog(err.message)}`);
+    avisarPropietarioSiConfiguracion(sock, err, 'voz');
+    if (err.categoriaVoz === 'cuota') marcarBloqueoVoz(60, 'Se acabó el crédito de voz de ElevenLabs.');
+    else if (err.categoriaVoz === 'autenticacion' || err.categoriaVoz === 'plan' || err.categoriaVoz === 'sin_clave') marcarBloqueoVoz(30, 'Hay un problema de configuración con la voz.');
+    sock.sendPresenceUpdate('paused', jid).catch(() => {});
+    const motivo = { cuota: 'Se acabó el crédito de voz de ElevenLabs', autenticacion: 'La clave de ElevenLabs no es válida', plan: 'Esa voz no está disponible en tu plan de ElevenLabs', timeout: 'ElevenLabs tardó demasiado' }[err.categoriaVoz] || 'No pude generar el audio';
+    return comoTexto(`🔇 ${motivo}; te respondo por texto.`);
+  }
+}
+
+// ── Instrucciones naturales: cambiar entre texto y voz ─────────────────────
+async function clasificarInstruccionModoConIA(texto) {
+  try {
+    const prompt = `Eres un clasificador. Una persona habla con su asistente por WhatsApp. Decide si el mensaje es una INSTRUCCIÓN PERMANENTE dirigida al asistente sobre cómo debe responderle de ahora en adelante: "voz" (responder hablando / con audios), "texto" (responder escribiendo) o "ninguna". Si es una pregunta, una mención casual de las palabras voz/audio/hablar/escribir, un tema de conversación, una petición puntual o algo ambiguo, responde "ninguna".\nMensaje: """${texto.slice(0, 220)}"""\nResponde SOLO con JSON: {"accion":"voz"|"texto"|"ninguna"}`;
+    const res = await generarConRespaldo('modo_voz', () => ({ contents: prompt, config: { maxOutputTokens: 40, temperature: 0, responseMimeType: 'application/json' } }), 12000);
+    let obj = null; try { obj = JSON.parse(res.text); } catch { obj = MODULO_TAREA ? MODULO_TAREA.extraerJSON(res.text) : null; }
+    const accion = (obj || {}).accion;
+    return accion === 'voz' || accion === 'texto' ? accion : null;
+  } catch { return null; }
+}
+
+// Devuelve true si el mensaje era una instrucción de modo (y ya se respondió).
+async function manejarCambioModoVoz(sock, jid, texto, numero) {
+  if (!VOZ) return false;
+  let cambio = MODULO_VOZ.detectarCambioModoVoz(texto);
+  if (!cambio && MODULO_VOZ.podriaSerInstruccionDeModo(texto)) cambio = await clasificarInstruccionModoConIA(texto);
+  if (!cambio) return false;
+  if (cambio === 'voz') {
+    if (!VOZ.cliente.configurado()) { await sock.sendMessage(jid, { text: '🔇 Todavía no puedo hablar: falta configurar ELEVENLABS_API_KEY en Render. Sigo respondiéndote por texto.' }); return true; }
+    establecerPrefVoz(numero, { modo: 'voz' });
+    await responderConVoz(sock, jid, '¡Listo! Desde ahora te respondo hablando. Si quieres volver a leerme, solo dímelo.', numero);
+  } else {
+    establecerPrefVoz(numero, { modo: 'texto' });
+    await sock.sendMessage(jid, { text: 'Listo, vuelvo a escribirte ✍️ Si me mandas una nota de voz, te sigo respondiendo con audio.' });
+  }
+  return true;
+}
+
+// ── Notas de voz del propietario → respuesta hablada automática ─────────────
+async function manejarNotaDeVozPropietario(sock, msg, remitente) {
+  const audio = desenvolverContenido(msg.message).audioMessage;
+  if (!audio || !audio.ptt) return false;                       // solo notas de voz, no música ni archivos de audio
+  if (idsAudioProcesados.has(msg.key.id)) return true;
+  idsAudioProcesados.add(msg.key.id);
+  if (idsAudioProcesados.size > 500) idsAudioProcesados.delete(idsAudioProcesados.values().next().value);
+  const numero = extraerNumero(remitente);
+  const t0 = Date.now();
+  sock.sendPresenceUpdate('recording', remitente).catch(() => {});
+  if (aNumero(audio.seconds) > DURACION_MAXIMA_NOTA_VOZ_SEGUNDOS) { await sock.sendMessage(remitente, { text: '⏱️ Esa nota de voz es demasiado larga para escucharla entera (máximo 6 minutos). ¿Me la mandas en partes?' }); return true; }
+  if (aNumero(audio.fileLength) > MAX_BYTES_AUDIO) { await sock.sendMessage(remitente, { text: '📦 Esa nota de voz pesa demasiado. ¿Me la mandas más corta?' }); return true; }
+  let buffer;
+  try {
+    buffer = await downloadMediaMessage(msg, 'buffer', {}, { logger: LOGGER_MEDIA, reuploadRequest: sockActivo && sockActivo.updateMediaMessage });
+    if (!buffer || buffer.length < 200 || buffer.length > MAX_BYTES_AUDIO) throw errorConCodigo('Audio vacío o demasiado grande', 'MEDIA_DESCARGA');
+  } catch (err) {
+    registrarEventoDiag('descarga_audio', err, Date.now() - t0);
+    await sock.sendMessage(remitente, { text: '💔 No pude descargar tu nota de voz. ¿Me la mandas otra vez?' });
+    return true;
+  }
+  try {
+    const notas = `Mensaje privado de tu PROPIETARIO/CREADOR (${msg.pushName || 'propietario'}), enviado como NOTA DE VOZ.${obtenerContextoCorto(remitente)}${NOTA_MODO_VOZ}`;
+    const respuesta = await generarRespuestaIAConAudio(buffer, audio.mimetype || 'audio/ogg', 'Escucha esta nota de voz y respóndeme de forma natural y conversacional, como si hablaras.', notas, remitente, numero);
+    const msIA = Date.now() - t0;
+    await responderConVoz(sock, remitente, respuesta, numero);
+    agregarAMemoriaCorta(remitente, '[nota de voz]', String(respuesta).slice(0, 300));
+    console.log(`⏱️ [NotaDeVoz] ia=${msIA} ms total=${Date.now() - t0} ms`);
+  } catch (err) {
+    registrarEventoDiag('nota_de_voz_ia', err, Date.now() - t0);
+    console.log(`❌ [NotaDeVoz] ${sanitizarParaLog(err.message)}`);
+    avisarPropietarioSiConfiguracion(sock, err, 'nota_de_voz');
+    await sock.sendMessage(remitente, { text: '💔 No pude entender tu nota de voz, ¿me la repites?' });
+  }
+  return true;
+}
+
+// ── Herramientas del propietario relacionadas con la voz (lenguaje natural) ─
+const RE_VOZ_LISTAR = /\b(lista|listame|mu[eé]strame|muestra|dime|cu[aá]les)\b[^.\n]{0,30}\b(voces)\b/i;
+const RE_VOZ_USAR = /\b(usa|utiliza|cambia|pon|elige|ponte)\b[^.\n]{0,25}\bvoz\b(?:\s+(?:de|a|llamada|como|con\s+id|id))?\s+([A-Za-zÁÉÍÓÚÑáéíóúñ0-9]{3,40})\s*[.!]?\s*$/i;
+const RE_VOZ_CREDITOS = /\b(cr[eé]ditos?|cuota|cu[aá]nto)\b[^.\n]{0,30}\b(voz|elevenlabs|audios?)\b|\b(voz|elevenlabs)\b[^.\n]{0,30}\b(cr[eé]ditos?|cuota|queda\w*)\b/i;
+const RE_VOZ_PRUEBA = /\b(prueba|probar)\b[^.\n]{0,10}\b(tu\s+)?voz\b|\bdi\s+algo\s+con\s+tu\s+voz\b|\bsuena\s+tu\s+voz\b/i;
+
+async function manejarHerramientasVoz(sock, jid, texto, numero) {
+  if (!VOZ) return false;
+  if (RE_VOZ_PRUEBA.test(texto)) {
+    await responderConVoz(sock, jid, 'Hola, soy yo, con mi voz. Si me escuchas bien, ya estamos listos para conversar.', numero);
+    return true;
+  }
+  if (RE_VOZ_LISTAR.test(texto)) {
+    if (!VOZ.cliente.configurado()) { await sock.sendMessage(jid, { text: '🔇 Falta ELEVENLABS_API_KEY en Render.' }); return true; }
+    try {
+      const voces = await VOZ.cliente.listarVoces();
+      const lineas = voces.slice(0, 25).map(v => `• ${v.nombre} — ${[v.genero, v.edad, v.acento, v.espanol ? 'español verificado' : ''].filter(Boolean).join(', ') || v.categoria}\n  id: ${v.id}`);
+      await sock.sendMessage(jid, { text: `🎙️ *Voces de tu cuenta* (${voces.length}):\n\n${lineas.join('\n')}\n\nPara elegir una dime, por ejemplo: "usa la voz Nombre". ${(obtenerPrefVoz(numero).voiceId) ? '' : 'Ahora uso la configurada en Render o la predeterminada.'}\n_En el plan gratuito, la API solo deja usar algunas voces._` });
+    } catch (err) { registrarEventoDiag('voz_listar', err); await sock.sendMessage(jid, { text: `❌ No pude listar las voces (${err.categoriaVoz || 'error'}). Si tu clave no tiene permiso "voices_read", pon el ID de la voz directamente en ELEVENLABS_VOICE_ID.` }); }
+    return true;
+  }
+  const mUsar = texto.match(RE_VOZ_USAR);
+  if (mUsar) {
+    const pedido = mUsar[2];
+    try {
+      const voces = await VOZ.cliente.listarVoces();
+      const encontrada = voces.find(v => v.id === pedido) || voces.find(v => (v.nombre || '').toLowerCase().split(/[\s\-–]/)[0] === pedido.toLowerCase()) || voces.find(v => (v.nombre || '').toLowerCase().includes(pedido.toLowerCase()));
+      if (!encontrada) { await sock.sendMessage(jid, { text: `No encontré una voz llamada "${pedido}" en tu cuenta. Pídeme "lista las voces" para ver las disponibles.` }); return true; }
+      establecerPrefVoz(numero, { voiceId: encontrada.id });
+      estadoVoz.vozAlternativa = null;
+      await responderConVoz(sock, jid, `Listo, ahora hablo con la voz ${encontrada.nombre.split(/[\s\-–]/)[0]}. ¿Qué tal suena?`, numero);
+    } catch (err) { registrarEventoDiag('voz_listar', err); await sock.sendMessage(jid, { text: '❌ No pude consultar tus voces en este momento.' }); }
+    return true;
+  }
+  if (RE_VOZ_CREDITOS.test(texto)) {
+    const local = `Uso local este mes: ≈ ${estadoVoz.caracteres} caracteres en ${estadoVoz.audios} audio(s) (límite que configuré: ${VOZ_LIMITE_CARACTERES_MES}).`;
+    try {
+      const s = await VOZ.cliente.suscripcion();
+      await sock.sendMessage(jid, { text: `🔊 *Crédito de voz (ElevenLabs)*\nPlan: ${s.plan || 'n/d'}\nUsados: ${s.usados} de ${s.limite}\n${s.reinicio ? `Se renueva: ${new Date(s.reinicio * 1000).toLocaleDateString('es-PE', { timeZone: 'America/Lima' })}\n` : ''}\n${local}` });
+    } catch (err) { await sock.sendMessage(jid, { text: `🔊 No pude consultar el saldo real a ElevenLabs (${err.categoriaVoz || 'error'}; tu clave puede no tener permiso "user_read").\n${local}` }); }
+    return true;
+  }
   return false;
 }
 
@@ -2127,7 +2441,7 @@ async function iniciarBot() {
   await verificarBinarioYtDlp();
   await actualizarSistema();
 
-  if (!nubeInicializada) { await inicializarNubeIntegrantes(); await inicializarNubePropietarios(); nubeInicializada = true; }
+  if (!nubeInicializada) { await inicializarNubeIntegrantes(); await inicializarNubePropietarios(); try { await inicializarVoz(); } catch (err) { console.log('⚠️ Error inicializando la voz:', sanitizarParaLog(err.message)); } nubeInicializada = true; }
 
   const { state, saveCreds } = await useMultiFileAuthState('sesion');
   const { version } = await fetchLatestBaileysVersion();
@@ -2174,6 +2488,12 @@ async function iniciarBot() {
           return;
         }
 
+        // 🆕 v3.5.0: nota de voz del propietario en su chat privado → respuesta hablada automática (sin importar el modo).
+        if (VOZ && esPropietarioEfectivo(remitente)) {
+          try { if (await manejarNotaDeVozPropietario(sock, msg, remitente)) return; }
+          catch (err) { registrarEventoDiag('nota_de_voz', err); console.log('❌ Error en nota de voz:', sanitizarParaLog(err.message)); return; }
+        }
+
         if (!textoPersonal) return;
 
         if (/^\/comando\s+anzy$/i.test(textoPersonal)) { await sock.sendMessage(remitente, { text: TEXTO_AYUDA }); return; }
@@ -2191,12 +2511,21 @@ async function iniciarBot() {
 
         try { const manejado = await manejarComandosGenerales(sock, remitente, remitente, textoPersonal, [], false, remitente); if (manejado) return; } catch (err) { return; }
 
-        if (debeResponderIA(textoPersonal, msg, IDENTIFICADORES_BOT_CACHE)) {
+        // 🆕 v3.5.0: en el chat privado del propietario se conversa sin comandos (desactivable con CHAT_PRIVADO_LIBRE=false).
+        const esDueñoPrivado = esPropietarioEfectivo(remitente);
+        if (debeResponderIA(textoPersonal, msg, IDENTIFICADORES_BOT_CACHE) || (CHAT_PRIVADO_LIBRE && esDueñoPrivado)) {
           const consultaSinMencion = textoPersonal.replace(/^\/\S*\s*/, '').trim() || textoPersonal;
           // 🔧 En privado la identidad es simplemente el número de quien
           // escribe — no hace falta resolver contra metadata de grupo.
           const identidadModo = extraerNumero(remitente);
           sock.sendPresenceUpdate('composing', remitente).catch(() => {});
+
+          // 🆕 v3.5.0: instrucciones naturales para cambiar entre texto y voz (solo el propietario, solo en privado).
+          if (VOZ && esDueñoPrivado && !extraerImagenDeMensaje(msg)) {
+            try { if (await manejarCambioModoVoz(sock, remitente, consultaSinMencion, identidadModo)) return; }
+            catch (err) { console.log('❌ Error al cambiar el modo de voz:', sanitizarParaLog(err.message)); }
+          }
+          const modoVozActivo = !!(VOZ && esDueñoPrivado && obtenerPrefVoz(identidadModo).modo === 'voz');
 
           // 🆕 v3.4.0: fotos, tiempo encendida y herramientas autorizadas también en privado.
           try { if (await manejarImagenIA(sock, msg, { jidChat: remitente, jidUsuario: remitente, identidadModo, nombreContacto: msg.pushName || 'un usuario', consulta: consultaSinMencion, esGrupo: false })) return; }
@@ -2208,8 +2537,8 @@ async function iniciarBot() {
           if (audioCitado) {
             try {
               const bufferAudio = await descargarAudioCitado(audioCitado);
-              const respuesta = await generarRespuestaIAConAudio(bufferAudio, audioCitado.mimetype, consultaSinMencion || 'Escucha este audio y cuéntame de qué trata.', `Mensaje privado de ${msg.pushName || 'un usuario'}.`, remitente, identidadModo);
-              await enviarRespuestaHumanizada(sock, remitente, respuesta, []);
+              const respuesta = await generarRespuestaIAConAudio(bufferAudio, audioCitado.mimetype, consultaSinMencion || 'Escucha este audio y cuéntame de qué trata.', `Mensaje privado de ${msg.pushName || 'un usuario'}.${modoVozActivo ? NOTA_MODO_VOZ : ''}`, remitente, identidadModo);
+              if (modoVozActivo) await responderConVoz(sock, remitente, respuesta, identidadModo); else await enviarRespuestaHumanizada(sock, remitente, respuesta, []);
               agregarAMemoriaCorta(remitente, textoPersonal, respuesta);
             } catch (err) { await sock.sendMessage(remitente, { text: '💔 No pude escuchar ese audio.' }); }
             return;
@@ -2225,9 +2554,9 @@ async function iniciarBot() {
             const esDueño = esPropietarioEfectivo(remitente);
             let notas = `Mensaje privado de ${msg.pushName || 'un usuario'}.`;
             if (esDueño) notas += `\n\nIMPORTANTE: es TU PROPIETARIO/CREADOR.`;
-            notas += obtenerContextoCorto(remitente) + contextoSistemaSiAplica(consultaSinMencion);
+            notas += obtenerContextoCorto(remitente) + contextoSistemaSiAplica(consultaSinMencion) + (modoVozActivo ? NOTA_MODO_VOZ : '');
             const respuesta = await generarRespuestaIA(consultaSinMencion, notas, remitente, identidadModo);
-            await enviarRespuestaHumanizada(sock, remitente, respuesta, []);
+            if (modoVozActivo) await responderConVoz(sock, remitente, respuesta, identidadModo); else await enviarRespuestaHumanizada(sock, remitente, respuesta, []);
             agregarAMemoriaCorta(remitente, textoPersonal, respuesta);
           } catch (err) { await sock.sendMessage(remitente, { text: mensajeEsperaAleatorio() }); }
         }
@@ -2277,6 +2606,7 @@ const LISTA_COMANDOS_PANEL = [
     ['/silencio · /activarse @user', 'Ignorar/reactivar usuario'], ['/movimiento', 'Últimos movimientos'],
     ['/actualizacion <mejoras>', 'La IA redacta el aviso de mantenimiento y lo manda a todos los grupos'],
     ['/novia @usuario', 'Activa modo novia dirigido a esa persona, sin encender el modo global'],
+    ['Voz (chat privado)', 'Nota de voz → respuesta hablada · "quiero escucharte" / "vuelve a escribirme" · "lista las voces" · "prueba tu voz"'],
     ['Aviso de salida', 'Si un integrante sale del grupo, el aviso+ficha+foto se manda AL MISMO GRUPO; solo tú confirmas la eliminación']
   ] },
   { cat: '📋 Info', items: [['/info', 'Info del bot'], ['/estado', 'Estado y tiempo encendida (el propietario ve el diagnóstico completo)'], ['/creador', 'Quién lo hizo'], ['/comando anzy', 'Lista pública']] },
