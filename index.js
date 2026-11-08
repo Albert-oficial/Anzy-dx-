@@ -289,9 +289,9 @@ const MODELO_IMAGEN = 'gemini-2.5-flash-image';
 const CODIGO_DUEÑO_LEGADO = '2927760128';
 const CODIGO_DUEÑO = limpiarValorEnv(process.env.CODIGO_PROPIETARIO) || CODIGO_DUEÑO_LEGADO;
 if (!limpiarValorEnv(process.env.CODIGO_PROPIETARIO)) console.log('⚠️ SEGURIDAD: CODIGO_PROPIETARIO no está definido en el entorno y se usa el valor antiguo escrito en el código. Defínelo en Render/.env y bórralo del código.');
-const NOMBRE_BOT = 'Anzy';
+const NOMBRE_BOT = 'VELYRA AI';
 const CREADOR = 'Albert Drak';
-const VERSION_BOT = '3.4.0';
+const VERSION_BOT = '3.5.0';
 const TU_NUMERO = '51996399291';
 const NUMERO_BOT_VINCULADO = '51975922748';
 const JID_DUEÑO = `${TU_NUMERO}@s.whatsapp.net`;
@@ -302,7 +302,8 @@ const LIMITE_DIARIO_ESTIMADO = 1400;
 const MAX_TOKENS_RESPUESTA = 1500;
 const INTEGRANTES_POR_PAGINA = 10;
 
-const COMANDO_LLAMADA_IA = '/anzy';
+const COMANDO_LLAMADA_IA = '/velyra';
+const COMANDOS_LLAMADA_IA = [COMANDO_LLAMADA_IA, '/anzy']; // '/anzy' se conserva como alias para no romper la costumbre del grupo
 
 // ═══════════════════════════════════════════════════════════════════════════
 // 🆕 v3.4.0 — TIEMPO ENCENDIDO, DIAGNÓSTICO Y LLAMADAS A LA IA CON TIEMPO LÍMITE
@@ -550,7 +551,7 @@ if (URL_DESCARGAS) console.log(`🔍 URL_DESCARGAS configurada: ${URL_DESCARGAS}
 const TEXTO_AYUDA = `*COMANDOS · ${NOMBRE_BOT}*
 
 🧠 *Inteligencia Artificial*
-• Mencióname, o escribe /anzy <pregunta>
+• Mencióname, o escribe /velyra <pregunta>
 • Cita un audio, mencióname y pídeme algo sobre él 🎙️
 • /imagen <descripción> — genero una imagen con IA
 • Envía o cita una foto y mencióname: la leo, resuelvo la tarea y, si quieres, te la devuelvo en una hoja en imagen 📸
@@ -580,7 +581,7 @@ const TEXTO_AYUDA = `*COMANDOS · ${NOMBRE_BOT}*
 
 📋 *Información*
 • /info · /creador · /estado
-• /comando anzy
+• /comando velyra
 
 🗂️ *Memoria personal*
 • /recordar · /olvidarme`;
@@ -1151,12 +1152,12 @@ async function manejarImagenIA(sock, msg, ctx) {
 // ── Herramientas autorizadas en lenguaje natural ─────────────────────────────
 // La IA NO ejecuta código ni comandos: estas frases se traducen a acciones explícitas de una lista fija.
 // Las acciones sensibles solo las puede pedir el propietario real (mismo sistema de autorización de siempre).
-const RE_HERR_ESTADO = /\b(estado|informe|status)\b[^.\n]{0,25}\b(bot|anzy|tuyo|de\s+ti)\b|\b(mu[eé]strame|dime|dame|ens[eé][nñ]ame|cu[aá]l\s+es)\b[^.\n]{0,20}\b(estado|informe)\b/i;
+const RE_HERR_ESTADO = /\b(estado|informe|status)\b[^.\n]{0,25}\b(bot|velyra|anzy|tuyo|de\s+ti)\b|\b(mu[eé]strame|dime|dame|ens[eé][nñ]ame|cu[aá]l\s+es)\b[^.\n]{0,20}\b(estado|informe)\b/i;
 const RE_HERR_PROBAR_IA = /\b(comprueba|verifica|revisa|chequea|prueba)\b[^.\n]{0,40}\b(ia|inteligencia|gemini|modelo|api)\b[^.\n]{0,40}\b(funcion\w*|anda|sirve|responde|bien|ok|activ\w*)\b/i;
 const RE_HERR_ANALIZAR = /\b(analiza|diagnostica|investiga|revisa|por\s+qu[eé])\b[^.\n]{0,50}\b(fall\w*|error\w*|problema\w*|no\s+responde\w*|lent\w*)\b/i;
 const RE_HERR_RESET_ESTILO = /\b(restablece|restaura|resetea|reinicia|quita)\b[^.\n]{0,30}\b(estilo|forma\s+de\s+(hablar|responder|expresar\w*)|respuestas?)\b/i;
-const RE_HERR_APAGAR = /\b(desactiva|apaga|det[eé]n|pausa)\s+(el\s+)?(bot|anzy)\b|\b(ap[aá]gate|desact[ií]vate|d[eé]tente)\b|^\s*ap[aá]ga\s*$/i;
-const RE_HERR_ENCENDER = /\b(activa|enciende|prende|reactiva)\s+(el\s+)?(bot|anzy)\b|\b(act[ií]vate|enci[eé]ndete|pr[eé]ndete)\b/i;
+const RE_HERR_APAGAR = /\b(desactiva|apaga|det[eé]n|pausa)\s+(el\s+)?(bot|velyra|anzy)\b|\b(ap[aá]gate|desact[ií]vate|d[eé]tente)\b|^\s*ap[aá]ga\s*$/i;
+const RE_HERR_ENCENDER = /\b(activa|enciende|prende|reactiva)\s+(el\s+)?(bot|velyra|anzy)\b|\b(act[ií]vate|enci[eé]ndete|pr[eé]ndete)\b/i;
 const RE_GENERAR_IMAGEN = /^(?:por\s+favor\s+)?(?:genera|crea|dibuja|haz|hazme|cr[eé]ame|g[eé]nerame)(?:me)?\s+(?:una\s+)?(?:imagen|foto|dibujo|ilustraci[oó]n)\s+(?:de|del|de\s+la|con|que)\s+(.{3,})$/i;
 
 function generarResumenEstadoPublico() {
@@ -1327,6 +1328,7 @@ async function sintetizarParaWhatsApp(textoHablado, numero) {
           const alternativa = await elegirVozAlternativa(preferida || process.env.ELEVENLABS_VOICE_ID || MODULO_VOZ.VOZ_PREDETERMINADA);
           if (!alternativa) throw err;
           console.log('🔊 [Voz] la voz configurada no está disponible en tu plan; se usa otra voz premade de tu cuenta.');
+          if (!estadoVoz.avisoVozAlternativaEnviado) estadoVoz.avisarVozAlternativa = true;
           const buffer = await VOZ.cliente.sintetizar(textoHablado, { voiceId: alternativa });
           estadoVoz.vozAlternativa = alternativa;
           return buffer;
@@ -1372,6 +1374,10 @@ async function responderConVoz(sock, jid, textoRespuesta, numero) {
     sock.sendPresenceUpdate('paused', jid).catch(() => {});
     console.log(`🔊 [Voz] audio enviado (${nota.ptt ? 'nota de voz Ogg/Opus' : 'audio mp3'}, ${nota.caracteres} caracteres, ${nota.buffer.length} bytes)`);
     if (resto) await sock.sendMessage(jid, { text: `📝 El resto te lo dejo escrito:\n\n${resto}` });
+    if (estadoVoz.avisarVozAlternativa) {
+      estadoVoz.avisarVozAlternativa = false; estadoVoz.avisoVozAlternativaEnviado = true;
+      await sock.sendMessage(jid, { text: 'ℹ️ La voz que elegiste no se puede usar por API con el plan gratuito de ElevenLabs (suele pasar con las voces de la biblioteca), así que usé otra voz femenina de tu cuenta. Para usar exactamente la tuya necesitas un plan de pago de ElevenLabs, o elige una voz premade: dime "lista las voces".' });
+    }
     return true;
   } catch (err) {
     estadoVoz.fallos++;
@@ -1606,7 +1612,7 @@ function esMencionAlBot(msg, texto, identificadoresBot) {
 
 function debeResponderIA(texto, msg, identificadoresBot) {
   if (esMencionAlBot(msg, texto, identificadoresBot)) return true;
-  return (texto.trim().split(/\s+/)[0] || '').toLowerCase() === COMANDO_LLAMADA_IA;
+  return COMANDOS_LLAMADA_IA.includes((texto.trim().split(/\s+/)[0] || '').toLowerCase());
 }
 
 function normalizarBusqueda(texto) { return (texto || '').normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim(); }
@@ -2176,7 +2182,7 @@ async function comandoCerrarGrupoComando(sock, jidGrupo, jidUsuario, cerrar) {
 }
 
 function generarTextoInfo() {
-  return `🤖 *${NOMBRE_BOT}* — v${VERSION_BOT}\n\n👨‍💻 Creada por: *${CREADOR}*.\n🟢 Estado: ${estado.conectado ? 'Conectada' : 'Desconectada'}\n⏱ Activa desde hace: ${formatearDuracionLarga(obtenerUptimeMs())}\n\nEscribe /comando anzy para ver comandos.`;
+  return `🤖 *${NOMBRE_BOT}* — v${VERSION_BOT}\n\n👨‍💻 Creada por: *${CREADOR}*.\n🟢 Estado: ${estado.conectado ? 'Conectada' : 'Desconectada'}\n⏱ Activa desde hace: ${formatearDuracionLarga(obtenerUptimeMs())}\n\nEscribe /comando velyra para ver comandos.`;
 }
 
 const TEXTO_CREADOR = `💖 Fui creada con mucho cariño por *${CREADOR}*. ¡Gracias por todo! 🙌✨`;
@@ -2326,7 +2332,7 @@ async function procesarMensajeGrupo(sock, msg, identificadoresBot) {
 
   registrarMensajeGrupo(jidGrupo, jidUsuario);
 
-  if (/^\/comando\s+anzy$/i.test(texto)) { await sock.sendMessage(jidGrupo, { text: TEXTO_AYUDA }); return; }
+  if (/^\/comando\s+(velyra|anzy)$/i.test(texto)) { await sock.sendMessage(jidGrupo, { text: TEXTO_AYUDA }); return; }
   if (PATRON_COMANDO_TIKTOK.test(texto)) { await manejarComandoTiktok(sock, jidGrupo, texto.replace(PATRON_COMANDO_TIKTOK, '').trim()); return; }
   if (PATRON_COMANDO_YOUTUBE.test(texto)) { const m = texto.match(PATRON_COMANDO_YOUTUBE); await manejarComandoYoutube(sock, jidGrupo, m[1]); return; }
   if (PATRON_COMANDO_YOUTUBEVIDEO.test(texto)) { const m = texto.match(PATRON_COMANDO_YOUTUBEVIDEO); await manejarComandoYoutubeVideo(sock, jidGrupo, m[1]); return; }
@@ -2359,7 +2365,7 @@ async function procesarMensajeGrupo(sock, msg, identificadoresBot) {
   const esDueñoResuelto = !!identidadModo && (esPropietario(identidadModo) || propietariosVerificados.has(identidadModo));
   sock.sendPresenceUpdate('composing', jidGrupo).catch(() => {});
 
-  // 🆕 v3.4.0: foto adjunta / citada / reciente (visión, tareas, hojas) — solo si se activó la IA (mención o /anzy).
+  // 🆕 v3.4.0: foto adjunta / citada / reciente (visión, tareas, hojas) — solo si se activó la IA (mención o /velyra).
   try { if (await manejarImagenIA(sock, msg, { jidChat: jidGrupo, jidUsuario, identidadModo, nombreContacto, consulta: consultaSinMencion, esGrupo: true })) return; }
   catch (err) { console.log('❌ Error en flujo de imagen:', sanitizarParaLog(err.message)); return; }
 
@@ -2496,7 +2502,7 @@ async function iniciarBot() {
 
         if (!textoPersonal) return;
 
-        if (/^\/comando\s+anzy$/i.test(textoPersonal)) { await sock.sendMessage(remitente, { text: TEXTO_AYUDA }); return; }
+        if (/^\/comando\s+(velyra|anzy)$/i.test(textoPersonal)) { await sock.sendMessage(remitente, { text: TEXTO_AYUDA }); return; }
         if (PATRON_COMANDO_TIKTOK.test(textoPersonal)) { await manejarComandoTiktok(sock, remitente, textoPersonal.replace(PATRON_COMANDO_TIKTOK, '').trim()); return; }
         if (PATRON_COMANDO_YOUTUBE.test(textoPersonal)) { const m = textoPersonal.match(PATRON_COMANDO_YOUTUBE); await manejarComandoYoutube(sock, remitente, m[1]); return; }
         if (PATRON_COMANDO_YOUTUBEVIDEO.test(textoPersonal)) { const m = textoPersonal.match(PATRON_COMANDO_YOUTUBEVIDEO); await manejarComandoYoutubeVideo(sock, remitente, m[1]); return; }
@@ -2592,7 +2598,7 @@ setInterval(async () => {
 const PANEL_FONDO_URL = limpiarValorEnv(process.env.PANEL_FONDO_URL) || '';
 
 const LISTA_COMANDOS_PANEL = [
-  { cat: '🧠 Inteligencia Artificial', items: [['/anzy <pregunta>', 'Pregúntale a la IA'], ['@bot <pregunta>', 'Mencionando al bot'], ['Cita un audio + menciona', 'Entiende y responde sobre el audio 🎙️'], ['Foto (adjunta o citada) + menciona', 'Lee la imagen, resuelve tareas y puede devolverlas en una hoja en imagen 📸'], ['/imagen <descripción>', 'Genera una imagen con IA']] },
+  { cat: '🧠 Inteligencia Artificial', items: [['/velyra <pregunta>', 'Pregúntale a la IA (también funciona /anzy)'], ['@bot <pregunta>', 'Mencionando al bot'], ['Cita un audio + menciona', 'Entiende y responde sobre el audio 🎙️'], ['Foto (adjunta o citada) + menciona', 'Lee la imagen, resuelve tareas y puede devolverlas en una hoja en imagen 📸'], ['/imagen <descripción>', 'Genera una imagen con IA']] },
   { cat: '🎭 Modos', items: [['/novia on · off', 'Modo cariñoso'], ['/amiga on · off', 'Modo amiga'], ['/novia @usuario', 'Solo propietario — activa modo novia dirigido a esa persona']] },
   { cat: '🎉 Descargas', items: [['/tiktok <enlace>', 'TikTok sin marca de agua'], ['/youtube <enlace>', 'Audio de YouTube'], ['/youtubevideo <enlace>', 'Video de YouTube'], ['/facebook <enlace>', 'Video de Facebook'], ['/facebookaudio <enlace>', 'Audio de Facebook'], ['/instagram <enlace>', 'Video de Instagram']] },
   { cat: '🎉 Utilidades', items: [['/frase', 'Frase random'], ['/perfil @user', 'Actividad en el grupo']] },
@@ -2609,7 +2615,7 @@ const LISTA_COMANDOS_PANEL = [
     ['Voz (chat privado)', 'Nota de voz → respuesta hablada · "quiero escucharte" / "vuelve a escribirme" · "lista las voces" · "prueba tu voz"'],
     ['Aviso de salida', 'Si un integrante sale del grupo, el aviso+ficha+foto se manda AL MISMO GRUPO; solo tú confirmas la eliminación']
   ] },
-  { cat: '📋 Info', items: [['/info', 'Info del bot'], ['/estado', 'Estado y tiempo encendida (el propietario ve el diagnóstico completo)'], ['/creador', 'Quién lo hizo'], ['/comando anzy', 'Lista pública']] },
+  { cat: '📋 Info', items: [['/info', 'Info del bot'], ['/estado', 'Estado y tiempo encendida (el propietario ve el diagnóstico completo)'], ['/creador', 'Quién lo hizo'], ['/comando velyra', 'Lista pública']] },
   { cat: '🗂️ Memoria', items: [['/recordar', 'Qué recuerda de ti'], ['/olvidarme', 'Borra su memoria']] }
 ];
 
