@@ -289,9 +289,9 @@ const MODELO_IMAGEN = 'gemini-2.5-flash-image';
 const CODIGO_DUEÑO_LEGADO = '2927760128';
 const CODIGO_DUEÑO = limpiarValorEnv(process.env.CODIGO_PROPIETARIO) || CODIGO_DUEÑO_LEGADO;
 if (!limpiarValorEnv(process.env.CODIGO_PROPIETARIO)) console.log('⚠️ SEGURIDAD: CODIGO_PROPIETARIO no está definido en el entorno y se usa el valor antiguo escrito en el código. Defínelo en Render/.env y bórralo del código.');
-const NOMBRE_BOT = 'VELYRA AI';
+const NOMBRE_BOT = 'YEYMI AI';
 const CREADOR = 'Albert Drak';
-const VERSION_BOT = '3.5.0';
+const VERSION_BOT = '3.6.0';
 const TU_NUMERO = '51996399291';
 const NUMERO_BOT_VINCULADO = '51975922748';
 const JID_DUEÑO = `${TU_NUMERO}@s.whatsapp.net`;
@@ -302,8 +302,8 @@ const LIMITE_DIARIO_ESTIMADO = 1400;
 const MAX_TOKENS_RESPUESTA = 1500;
 const INTEGRANTES_POR_PAGINA = 10;
 
-const COMANDO_LLAMADA_IA = '/velyra';
-const COMANDOS_LLAMADA_IA = [COMANDO_LLAMADA_IA, '/anzy']; // '/anzy' se conserva como alias para no romper la costumbre del grupo
+const COMANDO_LLAMADA_IA = '/yeymi';
+const COMANDOS_LLAMADA_IA = [COMANDO_LLAMADA_IA, '/yeimi', '/yeime', '/velyra', '/anzy']; // los nombres anteriores y variantes se conservan como alias
 
 // ═══════════════════════════════════════════════════════════════════════════
 // 🆕 v3.4.0 — TIEMPO ENCENDIDO, DIAGNÓSTICO Y LLAMADAS A LA IA CON TIEMPO LÍMITE
@@ -551,7 +551,7 @@ if (URL_DESCARGAS) console.log(`🔍 URL_DESCARGAS configurada: ${URL_DESCARGAS}
 const TEXTO_AYUDA = `*COMANDOS · ${NOMBRE_BOT}*
 
 🧠 *Inteligencia Artificial*
-• Mencióname, o escribe /velyra <pregunta>
+• Mencióname, o escribe /yeymi <pregunta>
 • Cita un audio, mencióname y pídeme algo sobre él 🎙️
 • /imagen <descripción> — genero una imagen con IA
 • Envía o cita una foto y mencióname: la leo, resuelvo la tarea y, si quieres, te la devuelvo en una hoja en imagen 📸
@@ -581,7 +581,7 @@ const TEXTO_AYUDA = `*COMANDOS · ${NOMBRE_BOT}*
 
 📋 *Información*
 • /info · /creador · /estado
-• /comando velyra
+• /comando yeymi
 
 🗂️ *Memoria personal*
 • /recordar · /olvidarme`;
@@ -1152,12 +1152,12 @@ async function manejarImagenIA(sock, msg, ctx) {
 // ── Herramientas autorizadas en lenguaje natural ─────────────────────────────
 // La IA NO ejecuta código ni comandos: estas frases se traducen a acciones explícitas de una lista fija.
 // Las acciones sensibles solo las puede pedir el propietario real (mismo sistema de autorización de siempre).
-const RE_HERR_ESTADO = /\b(estado|informe|status)\b[^.\n]{0,25}\b(bot|velyra|anzy|tuyo|de\s+ti)\b|\b(mu[eé]strame|dime|dame|ens[eé][nñ]ame|cu[aá]l\s+es)\b[^.\n]{0,20}\b(estado|informe)\b/i;
+const RE_HERR_ESTADO = /\b(estado|informe|status)\b[^.\n]{0,25}\b(bot|yeymi|yeimi|velyra|anzy|tuyo|de\s+ti)\b|\b(mu[eé]strame|dime|dame|ens[eé][nñ]ame|cu[aá]l\s+es)\b[^.\n]{0,20}\b(estado|informe)\b/i;
 const RE_HERR_PROBAR_IA = /\b(comprueba|verifica|revisa|chequea|prueba)\b[^.\n]{0,40}\b(ia|inteligencia|gemini|modelo|api)\b[^.\n]{0,40}\b(funcion\w*|anda|sirve|responde|bien|ok|activ\w*)\b/i;
 const RE_HERR_ANALIZAR = /\b(analiza|diagnostica|investiga|revisa|por\s+qu[eé])\b[^.\n]{0,50}\b(fall\w*|error\w*|problema\w*|no\s+responde\w*|lent\w*)\b/i;
 const RE_HERR_RESET_ESTILO = /\b(restablece|restaura|resetea|reinicia|quita)\b[^.\n]{0,30}\b(estilo|forma\s+de\s+(hablar|responder|expresar\w*)|respuestas?)\b/i;
-const RE_HERR_APAGAR = /\b(desactiva|apaga|det[eé]n|pausa)\s+(el\s+)?(bot|velyra|anzy)\b|\b(ap[aá]gate|desact[ií]vate|d[eé]tente)\b|^\s*ap[aá]ga\s*$/i;
-const RE_HERR_ENCENDER = /\b(activa|enciende|prende|reactiva)\s+(el\s+)?(bot|velyra|anzy)\b|\b(act[ií]vate|enci[eé]ndete|pr[eé]ndete)\b/i;
+const RE_HERR_APAGAR = /\b(desactiva|apaga|det[eé]n|pausa)\s+(el\s+)?(bot|yeymi|yeimi|velyra|anzy)\b|\b(ap[aá]gate|desact[ií]vate|d[eé]tente)\b|^\s*ap[aá]ga\s*$/i;
+const RE_HERR_ENCENDER = /\b(activa|enciende|prende|reactiva)\s+(el\s+)?(bot|yeymi|yeimi|velyra|anzy)\b|\b(act[ií]vate|enci[eé]ndete|pr[eé]ndete)\b/i;
 const RE_GENERAR_IMAGEN = /^(?:por\s+favor\s+)?(?:genera|crea|dibuja|haz|hazme|cr[eé]ame|g[eé]nerame)(?:me)?\s+(?:una\s+)?(?:imagen|foto|dibujo|ilustraci[oó]n)\s+(?:de|del|de\s+la|con|que)\s+(.{3,})$/i;
 
 function generarResumenEstadoPublico() {
@@ -1502,6 +1502,81 @@ async function manejarHerramientasVoz(sock, jid, texto, numero) {
   return false;
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// 🆕 v3.6.0 — Reconocer al propietario en privado (@lid), audios con el nombre de la IA en grupos,
+//             protección contra claves pegadas en el chat
+// ═══════════════════════════════════════════════════════════════════════════
+const NOMBRES_DE_LA_IA = 'YEYMI AI (puede oírse: Yeymi, Yeimi, Yeime, Yemi, Yeyme, Yeimy, Lleymi, "Yeymi AI")';
+const VOZ_GRUPOS_PARA = (process.env.VOZ_GRUPOS_PARA || 'propietario').toLowerCase(); // propietario | todos | nadie
+const CHAT_PRIVADO_LIBRE_TODOS = (process.env.CHAT_PRIVADO_LIBRE_PARA || 'propietario').toLowerCase() === 'todos';
+const vistosPrivados = new Set();
+
+// WhatsApp ahora identifica a veces los chats privados con un ID "@lid" en vez del número. Se traduce a tu número real.
+async function reconocerPropietarioPrivado(sock, msg) {
+  const remitente = msg.key.remoteJid;
+  const numeroLid = extraerNumero(remitente);
+  let reconocido = esPropietarioEfectivo(remitente);
+  let resolvio = false;
+  if (!reconocido && remitente.endsWith('@lid')) {
+    const candidatos = [msg.key.remoteJidAlt, msg.key.senderPn, msg.senderPn, msg.key.participantAlt];
+    for (const consulta of [remitente, numeroLid]) {
+      try { const pn = await sock.signalRepository?.lidMapping?.getPNForLID?.(consulta); if (pn) candidatos.push(pn); } catch { /* sin mapa de LID */ }
+    }
+    for (const c of candidatos) {
+      const n = extraerNumero(c);
+      if (!n || n === numeroLid) continue;
+      resolvio = true;
+      MAPA_LID_A_NUMERO.set(numeroLid, n);
+      if (esPropietario(n) || propietariosVerificados.has(n)) { propietariosVerificados.add(numeroLid); reconocido = true; break; } // solo en memoria
+    }
+  }
+  if (!vistosPrivados.has(numeroLid)) {
+    vistosPrivados.add(numeroLid);
+    console.log(`🔎 [Privado] chat ${remitente.endsWith('@lid') ? 'con ID @lid' : 'con número'} (…${numeroLid.slice(-4)}) · número real ${resolvio ? 'resuelto' : (remitente.endsWith('@lid') ? 'NO resuelto' : 'directo')} · propietario: ${reconocido ? 'sí' : 'no'}`);
+  }
+  return reconocido;
+}
+
+// Claves/tokens pegados por error en un chat: no se procesan ni se guardan.
+const RE_SECRETOS = [/\bsk_[a-f0-9]{30,}\b/i, /\bsk-[A-Za-z0-9_-]{30,}\b/, /\bAIza[0-9A-Za-z_\-]{30,}\b/, /\bgh[pousr]_[A-Za-z0-9]{30,}\b/, /\bcfut_[A-Za-z0-9]{30,}\b/, /\bBearer\s+[A-Za-z0-9._\-]{30,}\b/];
+function contieneSecreto(texto) { return RE_SECRETOS.some(r => r.test(texto || '')); }
+
+// Nota de voz en un GRUPO: se escucha y solo se responde si la persona llama a la IA por su nombre ("oye Yeymi...").
+async function manejarNotaDeVozEnGrupo(sock, msg) {
+  const audio = desenvolverContenido(msg.message).audioMessage;
+  if (!VOZ || !audio || !audio.ptt || VOZ_GRUPOS_PARA === 'nadie') return false;
+  const jidGrupo = msg.key.remoteJid, jidUsuario = msg.key.participant || '';
+  const esDueño = await esPropietarioContexto(sock, jidGrupo, jidUsuario);
+  if (VOZ_GRUPOS_PARA === 'propietario' && !esDueño) return false;
+  if (idsAudioProcesados.has(msg.key.id)) return true;
+  idsAudioProcesados.add(msg.key.id);
+  if (idsAudioProcesados.size > 500) idsAudioProcesados.delete(idsAudioProcesados.values().next().value);
+  if (aNumero(audio.seconds) > 120 || aNumero(audio.fileLength) > MAX_BYTES_AUDIO) return true; // en grupos solo notas cortas (cuida tu cuota)
+  const t0 = Date.now();
+  let buffer;
+  try { buffer = await downloadMediaMessage(msg, 'buffer', {}, { logger: LOGGER_MEDIA, reuploadRequest: sockActivo && sockActivo.updateMediaMessage }); if (!buffer || buffer.length < 200) return true; }
+  catch (err) { registrarEventoDiag('descarga_audio_grupo', err, Date.now() - t0); return true; }
+  const identidad = (await resolverNumeroReal(sock, jidGrupo, jidUsuario)) || extraerNumero(jidUsuario);
+  let reglas = REGLAS_IA_BASE;
+  const clave = claveModo(jidGrupo, identidad);
+  if (modoNovia.get(clave)) reglas += REGLAS_MODO_NOVIA; else if (modoAmiga.get(clave)) reglas += REGLAS_MODO_AMIGA;
+  if (estiloGlobalExtra) reglas += `\n\n🔧 DIRECTIVA GLOBAL: ${estiloGlobalExtra}`;
+  reglas += NOTA_MODO_VOZ + (esDueño ? '\n\nIMPORTANTE: quien habla es TU PROPIETARIO/CREADOR.' : '');
+  const pregunta = `Escucha esta nota de voz enviada a un grupo de WhatsApp. Decide si la persona se dirige a ti, ${NOMBRES_DE_LA_IA}, llamándote por tu nombre (por ejemplo "hola Yeymi", "oye Yeimi", "Yeymi, dime...").\nResponde SOLO con JSON: {"me_llama": true|false, "respuesta": "..."}.\nSi NO te llama por tu nombre, o solo mencionan el nombre de pasada sin hablarte a ti, pon me_llama=false y respuesta="". Si te llama, "respuesta" es lo que le contestarías, natural, breve y hablado (máximo 4 frases, sin emojis, sin listas, sin markdown).`;
+  let resultado;
+  try {
+    const res = await generarConRespaldo('audio_grupo', () => ({ contents: [{ role: 'user', parts: [{ inlineData: { mimeType: audio.mimetype || 'audio/ogg', data: buffer.toString('base64') } }, { text: pregunta }] }], config: { systemInstruction: reglas, safetySettings: SAFETY_SETTINGS, maxOutputTokens: 700, temperature: 0.6, responseMimeType: 'application/json' } }), TIMEOUT_IA_VISION_MS);
+    registrarUsoIA();
+    try { resultado = JSON.parse(res.text); } catch { resultado = MODULO_TAREA ? MODULO_TAREA.extraerJSON(res.text) : null; }
+  } catch (err) { registrarEventoDiag('audio_grupo_ia', err, Date.now() - t0); return true; }
+  console.log(`⏱️ [AudioGrupo] ${Date.now() - t0} ms · llamó a la IA: ${resultado && resultado.me_llama ? 'sí' : 'no'}`);
+  if (!resultado || resultado.me_llama !== true || !String(resultado.respuesta || '').trim()) return true; // no la nombró: silencio
+  const respuesta = String(resultado.respuesta).trim();
+  if (esDueño) await responderConVoz(sock, jidGrupo, respuesta, extraerNumero(jidUsuario));
+  else await sock.sendMessage(jidGrupo, { text: respuesta }, { quoted: msg });
+  return true;
+}
+
 const FRASES_AVISO_SALIDA_FALLBACK = ['Ay, mira quién se fue del grupo... y sí lo tenía fichado en el clan 👀', 'Se me salió alguien del grupo y ¡sorpresa! está en mi lista 📋', 'Alguien se despidió del grupo, pero yo sí lo tenía registrado 💅'];
 const FRASES_CONFIRMACION_ELIMINACION_FALLBACK = ['Listo, su registro ya no está en la lista del clan 🗑️', 'Su ficha ya fue eliminada de la lista 💔', 'Ya quité su registro, todo limpio 📋✨'];
 
@@ -1521,11 +1596,19 @@ const CF_MODELO_IMAGEN = limpiarValorEnv(process.env.CF_MODELO_IMAGEN) || '@cf/b
 const CF_ACTIVO = !!(CF_ACCOUNT_ID && CF_API_TOKEN);
 
 async function mejorarPromptImagen(descripcion) {
-  // FLUX entiende mejor el inglés: se traduce/enriquece con una llamada corta. Si falla, se usa el texto original.
+  // FLUX entiende mejor el inglés y los prompts detallados: se reescribe el pedido conservando TODOS los sujetos.
   try {
-    const res = await generarConRespaldo('prompt_imagen', () => ({ contents: `Convierte esta petición en un prompt corto en inglés (máximo 60 palabras) para un generador de imágenes. Responde SOLO con el prompt.\nPetición: ${descripcion}`, config: { maxOutputTokens: 200, temperature: 0.4 } }), 15000);
+    const instruccion = `Eres experto en prompts para FLUX (generador de imágenes). Convierte la petición en UN solo prompt en inglés de 40 a 110 palabras.
+REGLAS:
+1) Interpreta errores de tipeo evidentes según el contexto (por ejemplo "loco" junto a "perro" probablemente es "lobo").
+2) CONSERVA TODOS los sujetos y su cantidad. Si piden dos o más (por ejemplo un lobo y un perro), escribe cuántos son y que CADA UNO aparece completo, bien visible y distinto en la misma escena, interactuando (side by side, facing each other, etc.). Nunca fusiones ni omitas sujetos.
+3) Describe a cada sujeto con detalles (tamaño, color, pose), la composición (plano, ángulo), el fondo, la iluminación y el estilo. Si no piden un estilo: "highly detailed, photorealistic, sharp focus, cinematic lighting".
+4) No inventes sujetos nuevos. Sin texto dentro de la imagen salvo que lo pidan.
+Responde SOLO con el prompt.
+Petición: ${descripcion}`;
+    const res = await generarConRespaldo('prompt_imagen', () => ({ contents: instruccion, config: { maxOutputTokens: 400, temperature: 0.4 } }), 15000);
     const mejorado = String(res.text || '').trim().replace(/^["']|["']$/g, '');
-    return mejorado.length >= 5 ? mejorado.slice(0, 600) : descripcion;
+    return mejorado.length >= 10 ? mejorado.slice(0, 900) : descripcion;
   } catch (err) { return descripcion; }
 }
 
@@ -1536,7 +1619,7 @@ async function generarImagenCloudflare(prompt) {
   try {
     const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/ai/run/${CF_MODELO_IMAGEN}`, {
       method: 'POST', headers: { 'Authorization': `Bearer ${CF_API_TOKEN}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt, steps: 4 }), signal: controlador.signal
+      body: JSON.stringify({ prompt, steps: Math.min(8, Math.max(1, parseInt(process.env.CF_PASOS, 10) || 6)) }), signal: controlador.signal
     });
     if (!res.ok) { const e = new Error(`Cloudflare respondió ${res.status}: ${sanitizarParaLog(await res.text().catch(() => ''))}`); e.status = res.status; throw e; }
     let buffer;
@@ -2182,7 +2265,7 @@ async function comandoCerrarGrupoComando(sock, jidGrupo, jidUsuario, cerrar) {
 }
 
 function generarTextoInfo() {
-  return `🤖 *${NOMBRE_BOT}* — v${VERSION_BOT}\n\n👨‍💻 Creada por: *${CREADOR}*.\n🟢 Estado: ${estado.conectado ? 'Conectada' : 'Desconectada'}\n⏱ Activa desde hace: ${formatearDuracionLarga(obtenerUptimeMs())}\n\nEscribe /comando velyra para ver comandos.`;
+  return `🤖 *${NOMBRE_BOT}* — v${VERSION_BOT}\n\n👨‍💻 Creada por: *${CREADOR}*.\n🟢 Estado: ${estado.conectado ? 'Conectada' : 'Desconectada'}\n⏱ Activa desde hace: ${formatearDuracionLarga(obtenerUptimeMs())}\n\nEscribe /comando yeymi para ver comandos.`;
 }
 
 const TEXTO_CREADOR = `💖 Fui creada con mucho cariño por *${CREADOR}*. ¡Gracias por todo! 🙌✨`;
@@ -2301,6 +2384,11 @@ async function manejarComandosGenerales(sock, jidChat, jidUsuario, texto, mencio
       await sock.sendMessage(jidChat, { text: generarResumenDiagnostico() });
       return true;
     }
+    case '/miid': {
+      const lid = String(jidUsuario).endsWith('@lid');
+      await sock.sendMessage(jidChat, { text: `🔎 Te veo como ${lid ? 'un ID interno de WhatsApp (@lid)' : 'un número normal'} terminado en …${extraerNumero(jidUsuario).slice(-4)}.\nPropietario: ${esPropietarioEfectivo(jidUsuario) ? 'sí ✅' : 'no ❌'}\n${esPropietarioEfectivo(jidUsuario) ? '' : 'Si eres el propietario, escribe /propietario en este chat privado y luego tu contraseña (una sola vez).'}` });
+      return true;
+    }
     case '/info': await sock.sendMessage(jidChat, { text: generarTextoInfo() }); return true;
     case '/creador': await sock.sendMessage(jidChat, { text: TEXTO_CREADOR }); return true;
     case '/actualizacion': await comandoActualizacion(sock, jidChat, jidUsuario, resto.join(' ')); return true;
@@ -2332,7 +2420,7 @@ async function procesarMensajeGrupo(sock, msg, identificadoresBot) {
 
   registrarMensajeGrupo(jidGrupo, jidUsuario);
 
-  if (/^\/comando\s+(velyra|anzy)$/i.test(texto)) { await sock.sendMessage(jidGrupo, { text: TEXTO_AYUDA }); return; }
+  if (/^\/comando\s+(yeymi|yeimi|velyra|anzy)$/i.test(texto)) { await sock.sendMessage(jidGrupo, { text: TEXTO_AYUDA }); return; }
   if (PATRON_COMANDO_TIKTOK.test(texto)) { await manejarComandoTiktok(sock, jidGrupo, texto.replace(PATRON_COMANDO_TIKTOK, '').trim()); return; }
   if (PATRON_COMANDO_YOUTUBE.test(texto)) { const m = texto.match(PATRON_COMANDO_YOUTUBE); await manejarComandoYoutube(sock, jidGrupo, m[1]); return; }
   if (PATRON_COMANDO_YOUTUBEVIDEO.test(texto)) { const m = texto.match(PATRON_COMANDO_YOUTUBEVIDEO); await manejarComandoYoutubeVideo(sock, jidGrupo, m[1]); return; }
@@ -2365,7 +2453,7 @@ async function procesarMensajeGrupo(sock, msg, identificadoresBot) {
   const esDueñoResuelto = !!identidadModo && (esPropietario(identidadModo) || propietariosVerificados.has(identidadModo));
   sock.sendPresenceUpdate('composing', jidGrupo).catch(() => {});
 
-  // 🆕 v3.4.0: foto adjunta / citada / reciente (visión, tareas, hojas) — solo si se activó la IA (mención o /velyra).
+  // 🆕 v3.4.0: foto adjunta / citada / reciente (visión, tareas, hojas) — solo si se activó la IA (mención o /yeymi).
   try { if (await manejarImagenIA(sock, msg, { jidChat: jidGrupo, jidUsuario, identidadModo, nombreContacto, consulta: consultaSinMencion, esGrupo: true })) return; }
   catch (err) { console.log('❌ Error en flujo de imagen:', sanitizarParaLog(err.message)); return; }
 
@@ -2479,6 +2567,13 @@ async function iniciarBot() {
     if (!msg || !msg.message) return;
     const remitente = msg.key.remoteJid;
     if (msg.key.fromMe) return;
+    // 🆕 v3.6.0: si alguien pega una clave/token en el chat, no se procesa ni se guarda, y se avisa.
+    const _textoSecreto = obtenerTextoMensaje(msg);
+    if (_textoSecreto && contieneSecreto(_textoSecreto)) {
+      console.log('🔐 Mensaje con una clave secreta detectado: no se procesó ni se guardó.');
+      await sock.sendMessage(remitente, { text: '🔐 Ese mensaje parece contener una clave secreta. No lo procesé ni lo guardé. Bórralo del chat para todos y renueva esa clave: las claves van solo en Render (Environment), nunca en WhatsApp.' }).catch(() => {});
+      return;
+    }
     guardarEnAlmacen(msg);
     registrarImagenSiCorresponde(msg);
 
@@ -2486,6 +2581,7 @@ async function iniciarBot() {
       if (remitente.endsWith('@s.whatsapp.net') || remitente.endsWith('@lid')) {
         const textoPersonal = obtenerTextoMensaje(msg);
         if (esNumeroIgnorado(remitente)) return;
+        await reconocerPropietarioPrivado(sock, msg).catch(() => false); // 🆕 v3.6.0: traduce el ID @lid a tu número
 
         if (pendientesPropietario.has(remitente)) {
           pendientesPropietario.delete(remitente);
@@ -2502,7 +2598,7 @@ async function iniciarBot() {
 
         if (!textoPersonal) return;
 
-        if (/^\/comando\s+(velyra|anzy)$/i.test(textoPersonal)) { await sock.sendMessage(remitente, { text: TEXTO_AYUDA }); return; }
+        if (/^\/comando\s+(yeymi|yeimi|velyra|anzy)$/i.test(textoPersonal)) { await sock.sendMessage(remitente, { text: TEXTO_AYUDA }); return; }
         if (PATRON_COMANDO_TIKTOK.test(textoPersonal)) { await manejarComandoTiktok(sock, remitente, textoPersonal.replace(PATRON_COMANDO_TIKTOK, '').trim()); return; }
         if (PATRON_COMANDO_YOUTUBE.test(textoPersonal)) { const m = textoPersonal.match(PATRON_COMANDO_YOUTUBE); await manejarComandoYoutube(sock, remitente, m[1]); return; }
         if (PATRON_COMANDO_YOUTUBEVIDEO.test(textoPersonal)) { const m = textoPersonal.match(PATRON_COMANDO_YOUTUBEVIDEO); await manejarComandoYoutubeVideo(sock, remitente, m[1]); return; }
@@ -2519,7 +2615,7 @@ async function iniciarBot() {
 
         // 🆕 v3.5.0: en el chat privado del propietario se conversa sin comandos (desactivable con CHAT_PRIVADO_LIBRE=false).
         const esDueñoPrivado = esPropietarioEfectivo(remitente);
-        if (debeResponderIA(textoPersonal, msg, IDENTIFICADORES_BOT_CACHE) || (CHAT_PRIVADO_LIBRE && esDueñoPrivado)) {
+        if (debeResponderIA(textoPersonal, msg, IDENTIFICADORES_BOT_CACHE) || (CHAT_PRIVADO_LIBRE && (esDueñoPrivado || CHAT_PRIVADO_LIBRE_TODOS))) {
           const consultaSinMencion = textoPersonal.replace(/^\/\S*\s*/, '').trim() || textoPersonal;
           // 🔧 En privado la identidad es simplemente el número de quien
           // escribe — no hace falta resolver contra metadata de grupo.
@@ -2571,6 +2667,11 @@ async function iniciarBot() {
     }
 
     if (!botActivo) return;
+    // 🆕 v3.6.0: notas de voz en grupos — solo responde si la llaman por su nombre (por defecto, solo a las del propietario).
+    if (VOZ && desenvolverContenido(msg.message).audioMessage) {
+      try { if (await manejarNotaDeVozEnGrupo(sock, msg)) return; }
+      catch (err) { registrarEventoDiag('audio_grupo', err); console.log('❌ Error en audio de grupo:', sanitizarParaLog(err.message)); return; }
+    }
     const tipoMensaje = Object.keys(msg.message)[0];
     const tieneTexto = !!(msg.message.conversation || msg.message.extendedTextMessage?.text || msg.message.imageMessage?.caption);
     const esSoloMedia = ['audioMessage', 'videoMessage', 'stickerMessage'].includes(tipoMensaje) && !tieneTexto;
@@ -2598,7 +2699,7 @@ setInterval(async () => {
 const PANEL_FONDO_URL = limpiarValorEnv(process.env.PANEL_FONDO_URL) || '';
 
 const LISTA_COMANDOS_PANEL = [
-  { cat: '🧠 Inteligencia Artificial', items: [['/velyra <pregunta>', 'Pregúntale a la IA (también funciona /anzy)'], ['@bot <pregunta>', 'Mencionando al bot'], ['Cita un audio + menciona', 'Entiende y responde sobre el audio 🎙️'], ['Foto (adjunta o citada) + menciona', 'Lee la imagen, resuelve tareas y puede devolverlas en una hoja en imagen 📸'], ['/imagen <descripción>', 'Genera una imagen con IA']] },
+  { cat: '🧠 Inteligencia Artificial', items: [['/yeymi <pregunta>', 'Pregúntale a la IA (también /yeimi, /velyra, /anzy)'], ['@bot <pregunta>', 'Mencionando al bot'], ['Cita un audio + menciona', 'Entiende y responde sobre el audio 🎙️'], ['Foto (adjunta o citada) + menciona', 'Lee la imagen, resuelve tareas y puede devolverlas en una hoja en imagen 📸'], ['/imagen <descripción>', 'Genera una imagen con IA']] },
   { cat: '🎭 Modos', items: [['/novia on · off', 'Modo cariñoso'], ['/amiga on · off', 'Modo amiga'], ['/novia @usuario', 'Solo propietario — activa modo novia dirigido a esa persona']] },
   { cat: '🎉 Descargas', items: [['/tiktok <enlace>', 'TikTok sin marca de agua'], ['/youtube <enlace>', 'Audio de YouTube'], ['/youtubevideo <enlace>', 'Video de YouTube'], ['/facebook <enlace>', 'Video de Facebook'], ['/facebookaudio <enlace>', 'Audio de Facebook'], ['/instagram <enlace>', 'Video de Instagram']] },
   { cat: '🎉 Utilidades', items: [['/frase', 'Frase random'], ['/perfil @user', 'Actividad en el grupo']] },
@@ -2615,7 +2716,7 @@ const LISTA_COMANDOS_PANEL = [
     ['Voz (chat privado)', 'Nota de voz → respuesta hablada · "quiero escucharte" / "vuelve a escribirme" · "lista las voces" · "prueba tu voz"'],
     ['Aviso de salida', 'Si un integrante sale del grupo, el aviso+ficha+foto se manda AL MISMO GRUPO; solo tú confirmas la eliminación']
   ] },
-  { cat: '📋 Info', items: [['/info', 'Info del bot'], ['/estado', 'Estado y tiempo encendida (el propietario ve el diagnóstico completo)'], ['/creador', 'Quién lo hizo'], ['/comando velyra', 'Lista pública']] },
+  { cat: '📋 Info', items: [['/info', 'Info del bot'], ['/estado', 'Estado y tiempo encendida (el propietario ve el diagnóstico completo)'], ['/creador', 'Quién lo hizo'], ['/comando yeymi', 'Lista pública']] },
   { cat: '🗂️ Memoria', items: [['/recordar', 'Qué recuerda de ti'], ['/olvidarme', 'Borra su memoria']] }
 ];
 
