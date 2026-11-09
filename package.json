@@ -1,13 +1,19 @@
 {
-  "name": "laurabot",
-  "version": "5.2.0",
-  "description": "",
+  "name": "yeimi-ai",
+  "version": "3.8.0",
+  "description": "YEIMI AI - Asistente inteligente de WhatsApp con voz femenina",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\""
+    "start": "node index.js",
+    "test": "node --check index.js"
   },
-  "keywords": [],
-  "author": "",
+  "keywords": [
+    "yeimi",
+    "whatsapp",
+    "artificial-intelligence",
+    "voice-assistant"
+  ],
+  "author": "YEIMI AI",
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
@@ -19,6 +25,7 @@
     "qrcode": "^1.5.4",
     "qrcode-terminal": "^0.12.0",
     "ytdl-core": "^4.11.5",
-    "sharp": "^0.35.0"
+    "sharp": "^0.35.0",
+    "pino": "^9.0.0"
   }
 }
