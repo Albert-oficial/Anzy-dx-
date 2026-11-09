@@ -149,7 +149,7 @@ async function enviarResultadoTiktok(sock, jidDestino, resultado) {
   if (resultado.tipo === 'slideshow') {
     await sock.sendMessage(jidDestino, { text: `📸 Publicación de fotos — te mando ${resultado.imagenes.length} imagen(es) 💕` });
     let enviadas = 0;
-    for (const imgUrl of resultado.imagenes.slice(0, 15)) { try { await sock.sendMessage(jidDestino, { image: { url: imgUrl } }); enviadas++; } catch (err) {} }
+    for (const imgUrl of resultado.imagenes.slice(0, 4)) { try { await sock.sendMessage(jidDestino, { image: { url: imgUrl } }); enviadas++; } catch (err) {} }
     if (resultado.audio) { try { await sock.sendMessage(jidDestino, { audio: { url: resultado.audio }, mimetype: 'audio/mpeg' }); } catch (err) {} }
     if (enviadas === 0) await sock.sendMessage(jidDestino, { text: '💔 No pude enviar ninguna imagen, el enlace pudo haber vencido.' });
   }
@@ -289,9 +289,9 @@ const MODELO_IMAGEN = 'gemini-2.5-flash-image';
 const CODIGO_DUEÑO_LEGADO = '2927760128';
 const CODIGO_DUEÑO = limpiarValorEnv(process.env.CODIGO_PROPIETARIO) || CODIGO_DUEÑO_LEGADO;
 if (!limpiarValorEnv(process.env.CODIGO_PROPIETARIO)) console.log('⚠️ SEGURIDAD: CODIGO_PROPIETARIO no está definido en el entorno y se usa el valor antiguo escrito en el código. Defínelo en Render/.env y bórralo del código.');
-const NOMBRE_BOT = 'YEYMI AI';
+const NOMBRE_BOT = 'YEIMI AI';
 const CREADOR = 'Albert Drak';
-const VERSION_BOT = '3.6.0';
+const VERSION_BOT = '3.8.0';
 const TU_NUMERO = '51996399291';
 const NUMERO_BOT_VINCULADO = '51975922748';
 const JID_DUEÑO = `${TU_NUMERO}@s.whatsapp.net`;
@@ -302,8 +302,8 @@ const LIMITE_DIARIO_ESTIMADO = 1400;
 const MAX_TOKENS_RESPUESTA = 1500;
 const INTEGRANTES_POR_PAGINA = 10;
 
-const COMANDO_LLAMADA_IA = '/yeymi';
-const COMANDOS_LLAMADA_IA = [COMANDO_LLAMADA_IA, '/yeimi', '/yeime', '/velyra', '/anzy']; // los nombres anteriores y variantes se conservan como alias
+const COMANDO_LLAMADA_IA = '/yeimi';
+const COMANDOS_LLAMADA_IA = [COMANDO_LLAMADA_IA]; // nombre y comando único: YEIMI
 
 // ═══════════════════════════════════════════════════════════════════════════
 // 🆕 v3.4.0 — TIEMPO ENCENDIDO, DIAGNÓSTICO Y LLAMADAS A LA IA CON TIEMPO LÍMITE
@@ -355,7 +355,7 @@ function fechaLegible(ms) {
 function obtenerUptimeMs() { return Date.now() - INICIO_PROCESO_MS; }
 
 function textoUptime() {
-  return `${NOMBRE_BOT.toUpperCase()} ESTÁ ACTIVO DESDE HACE:\n\n${formatearDuracionLarga(obtenerUptimeMs())}.\n\n_Tiempo del proceso actual (se reinicia cada vez que el bot se reinicia). Inicio: ${fechaLegible(INICIO_PROCESO_MS)} (hora de Lima)._`;
+  return `${NOMBRE_BOT.toUpperCase()} ESTÁ ACTIVA DESDE HACE:\n\n${formatearDuracionLarga(obtenerUptimeMs())}.\n\n_Tiempo del proceso actual (se reinicia cada vez que el bot se reinicia). Inicio: ${fechaLegible(INICIO_PROCESO_MS)} (hora de Lima)._`;
 }
 
 const PATRON_PREGUNTA_UPTIME = /(cu[aá]nto\s+tiempo\s+(llevas|lleva|has\s+estado|est[aá]s?|estas)\s+(encendid|prendid|activ|funcionando|conectad|despiert|on\b)|cu[aá]nto\s+(llevas|lleva)\s+(encendid|prendid|activ|funcionando)|desde\s+cu[aá]ndo\s+(est[aá]s?|estas)\s+(encendid|prendid|activ|conectad|funcionando)|\buptime\b|tiempo\s+(de\s+)?(actividad|encendid\w*|funcionamiento)|hace\s+cu[aá]nto\s+(est[aá]s?|estas)\s+(encendid|prendid|activ))/i;
@@ -551,7 +551,7 @@ if (URL_DESCARGAS) console.log(`🔍 URL_DESCARGAS configurada: ${URL_DESCARGAS}
 const TEXTO_AYUDA = `*COMANDOS · ${NOMBRE_BOT}*
 
 🧠 *Inteligencia Artificial*
-• Mencióname, o escribe /yeymi <pregunta>
+• Mencióname, o escribe /yeimi <pregunta>
 • Cita un audio, mencióname y pídeme algo sobre él 🎙️
 • /imagen <descripción> — genero una imagen con IA
 • Envía o cita una foto y mencióname: la leo, resuelvo la tarea y, si quieres, te la devuelvo en una hoja en imagen 📸
@@ -581,7 +581,7 @@ const TEXTO_AYUDA = `*COMANDOS · ${NOMBRE_BOT}*
 
 📋 *Información*
 • /info · /creador · /estado
-• /comando yeymi
+• /comando yeimi
 
 🗂️ *Memoria personal*
 • /recordar · /olvidarme`;
@@ -765,7 +765,7 @@ const DURACION_MAXIMA_AUDIO_IA_SEGUNDOS = 360; // 6 minutos
 // en la conversión, se manda el audio original tal cual (nunca se bloquea
 // la respuesta por esto).
 async function convertirAudioParaIA(bufferOriginal) {
-  const idTemp = Date.now();
+  const idTemp = crypto.randomUUID();
   const rutaEntrada = path.join(__dirname, `temp_audio_ia_in_${idTemp}.ogg`);
   const rutaSalida = path.join(__dirname, `temp_audio_ia_out_${idTemp}.ogg`);
   try {
@@ -824,7 +824,7 @@ async function generarRespuestaIAConAudio(bufferAudio, mimetype, promptTexto, no
   if (notasExtra) reglasFinales += `\n\nCONTEXTO ADICIONAL: ${notasExtra}`;
 
   const { buffer: bufferListo, mimetype: mimetypeListo } = await convertirAudioParaIA(bufferAudio);
-  const mimetypeFinal = mimetypeListo || mimetype || 'audio/ogg';
+  const mimetypeFinal = String(mimetypeListo || mimetype || 'audio/ogg').split(';')[0].trim().toLowerCase();
 
   const contenido = [{ role: 'user', parts: [
     { inlineData: { mimeType: mimetypeFinal, data: bufferListo.toString('base64') } },
@@ -1117,7 +1117,7 @@ async function manejarImagenIA(sock, msg, ctx) {
           try {
             const datos = MODULO_TAREA.datosParaHoja(resultado, { pie: `${NOMBRE_BOT} v${VERSION_BOT}`, subtitulo: `Resuelta por ${NOMBRE_BOT}` });
             const hoja = await MODULO_HOJA.renderizarHoja(datos);
-            for (let i = 0; i < hoja.paginas.length; i++) {
+            for (let i = 0; i < Math.min(hoja.paginas.length, 2); i++) {
               const pie = ver.discrepancias ? ' ⚠️ Revisa los ejercicios marcados.' : '';
               await sock.sendMessage(jidChat, { image: hoja.paginas[i], caption: `📚 Tarea resuelta (hoja ${i + 1}/${hoja.paginas.length}${hoja.truncado ? '+' : ''})${pie}` }, i === 0 ? { quoted: msg } : undefined);
             }
@@ -1152,12 +1152,12 @@ async function manejarImagenIA(sock, msg, ctx) {
 // ── Herramientas autorizadas en lenguaje natural ─────────────────────────────
 // La IA NO ejecuta código ni comandos: estas frases se traducen a acciones explícitas de una lista fija.
 // Las acciones sensibles solo las puede pedir el propietario real (mismo sistema de autorización de siempre).
-const RE_HERR_ESTADO = /\b(estado|informe|status)\b[^.\n]{0,25}\b(bot|yeymi|yeimi|velyra|anzy|tuyo|de\s+ti)\b|\b(mu[eé]strame|dime|dame|ens[eé][nñ]ame|cu[aá]l\s+es)\b[^.\n]{0,20}\b(estado|informe)\b/i;
+const RE_HERR_ESTADO = /\b(estado|informe|status)\b[^.\n]{0,25}\b(bot|yeimi|tuyo|de\s+ti)\b|\b(mu[eé]strame|dime|dame|ens[eé][nñ]ame|cu[aá]l\s+es)\b[^.\n]{0,20}\b(estado|informe)\b/i;
 const RE_HERR_PROBAR_IA = /\b(comprueba|verifica|revisa|chequea|prueba)\b[^.\n]{0,40}\b(ia|inteligencia|gemini|modelo|api)\b[^.\n]{0,40}\b(funcion\w*|anda|sirve|responde|bien|ok|activ\w*)\b/i;
 const RE_HERR_ANALIZAR = /\b(analiza|diagnostica|investiga|revisa|por\s+qu[eé])\b[^.\n]{0,50}\b(fall\w*|error\w*|problema\w*|no\s+responde\w*|lent\w*)\b/i;
 const RE_HERR_RESET_ESTILO = /\b(restablece|restaura|resetea|reinicia|quita)\b[^.\n]{0,30}\b(estilo|forma\s+de\s+(hablar|responder|expresar\w*)|respuestas?)\b/i;
-const RE_HERR_APAGAR = /\b(desactiva|apaga|det[eé]n|pausa)\s+(el\s+)?(bot|yeymi|yeimi|velyra|anzy)\b|\b(ap[aá]gate|desact[ií]vate|d[eé]tente)\b|^\s*ap[aá]ga\s*$/i;
-const RE_HERR_ENCENDER = /\b(activa|enciende|prende|reactiva)\s+(el\s+)?(bot|yeymi|yeimi|velyra|anzy)\b|\b(act[ií]vate|enci[eé]ndete|pr[eé]ndete)\b/i;
+const RE_HERR_APAGAR = /\b(desactiva|apaga|det[eé]n|pausa)\s+(el\s+)?(bot|yeimi)\b|\b(ap[aá]gate|desact[ií]vate|d[eé]tente)\b|^\s*ap[aá]ga\s*$/i;
+const RE_HERR_ENCENDER = /\b(activa|enciende|prende|reactiva)\s+(el\s+)?(bot|yeimi)\b|\b(act[ií]vate|enci[eé]ndete|pr[eé]ndete)\b/i;
 const RE_GENERAR_IMAGEN = /^(?:por\s+favor\s+)?(?:genera|crea|dibuja|haz|hazme|cr[eé]ame|g[eé]nerame)(?:me)?\s+(?:una\s+)?(?:imagen|foto|dibujo|ilustraci[oó]n)\s+(?:de|del|de\s+la|con|que)\s+(.{3,})$/i;
 
 function generarResumenEstadoPublico() {
@@ -1223,6 +1223,7 @@ const NOTA_MODO_VOZ = `\n\nMODO VOZ: tu respuesta se convertirá en audio y la o
 
 const estadoVoz = { bloqueadoHasta: 0, motivoBloqueo: '', avisoBloqueoEnviado: false, ffmpegOpus: null, vozAlternativa: null, mes: '', caracteres: 0, audios: 0, fallos: 0 };
 const idsAudioProcesados = new Set();
+const DIAG_AUDIO = { privadosDetectados: 0, gruposDetectados: 0, geminiOk: 0, geminiError: 0, descargaError: 0, llamadasYeimi: 0 };
 
 // ── Preferencias persistentes (local + GitHub, el mismo mecanismo que usas para propietarios) ──
 let prefsVoz = { version: 1, usuarios: {} };
@@ -1420,15 +1421,17 @@ async function manejarCambioModoVoz(sock, jid, texto, numero) {
   return true;
 }
 
-// ── Notas de voz del propietario → respuesta hablada automática ─────────────
+// ── Audio privado de cualquier contacto → comprensión Gemini + respuesta hablada si está configurada ──
 async function manejarNotaDeVozPropietario(sock, msg, remitente) {
   const audio = desenvolverContenido(msg.message).audioMessage;
-  if (!audio || !audio.ptt) return false;                       // solo notas de voz, no música ni archivos de audio
+  if (!audio) return false; // notas de voz y archivos de audio
   if (idsAudioProcesados.has(msg.key.id)) return true;
   idsAudioProcesados.add(msg.key.id);
   if (idsAudioProcesados.size > 500) idsAudioProcesados.delete(idsAudioProcesados.values().next().value);
   const numero = extraerNumero(remitente);
   const t0 = Date.now();
+  DIAG_AUDIO.privadosDetectados++;
+  console.log(`🎧 [AudioPrivado] detectado jid=${remitente.slice(-18)} ptt=${!!audio.ptt} mime=${audio.mimetype || 'sin-mime'} segundos=${audio.seconds || '?'} bytes=${audio.fileLength || '?'}`);
   sock.sendPresenceUpdate('recording', remitente).catch(() => {});
   if (aNumero(audio.seconds) > DURACION_MAXIMA_NOTA_VOZ_SEGUNDOS) { await sock.sendMessage(remitente, { text: '⏱️ Esa nota de voz es demasiado larga para escucharla entera (máximo 6 minutos). ¿Me la mandas en partes?' }); return true; }
   if (aNumero(audio.fileLength) > MAX_BYTES_AUDIO) { await sock.sendMessage(remitente, { text: '📦 Esa nota de voz pesa demasiado. ¿Me la mandas más corta?' }); return true; }
@@ -1437,20 +1440,25 @@ async function manejarNotaDeVozPropietario(sock, msg, remitente) {
     buffer = await downloadMediaMessage(msg, 'buffer', {}, { logger: LOGGER_MEDIA, reuploadRequest: sockActivo && sockActivo.updateMediaMessage });
     if (!buffer || buffer.length < 200 || buffer.length > MAX_BYTES_AUDIO) throw errorConCodigo('Audio vacío o demasiado grande', 'MEDIA_DESCARGA');
   } catch (err) {
+    DIAG_AUDIO.descargaError++;
     registrarEventoDiag('descarga_audio', err, Date.now() - t0);
     await sock.sendMessage(remitente, { text: '💔 No pude descargar tu nota de voz. ¿Me la mandas otra vez?' });
     return true;
   }
   try {
-    const notas = `Mensaje privado de tu PROPIETARIO/CREADOR (${msg.pushName || 'propietario'}), enviado como NOTA DE VOZ.${obtenerContextoCorto(remitente)}${NOTA_MODO_VOZ}`;
+    const esDuenoAudio = esPropietarioEfectivo(remitente);
+    const notas = `Mensaje privado de ${esDuenoAudio ? 'tu PROPIETARIO/CREADOR' : 'un contacto'} (${msg.pushName || 'contacto'}), enviado como audio.${obtenerContextoCorto(remitente)}${NOTA_MODO_VOZ}`;
     const respuesta = await generarRespuestaIAConAudio(buffer, audio.mimetype || 'audio/ogg', 'Escucha esta nota de voz y respóndeme de forma natural y conversacional, como si hablaras.', notas, remitente, numero);
+    DIAG_AUDIO.geminiOk++;
     const msIA = Date.now() - t0;
-    await responderConVoz(sock, remitente, respuesta, numero);
+    if (VOZ && VOZ.cliente.configurado() && !MODO_TEXTO_PRIVADO.has(remitente)) await responderConVoz(sock, remitente, respuesta, numero);
+    else await enviarRespuestaHumanizada(sock, remitente, respuesta, []);
     agregarAMemoriaCorta(remitente, '[nota de voz]', String(respuesta).slice(0, 300));
-    console.log(`⏱️ [NotaDeVoz] ia=${msIA} ms total=${Date.now() - t0} ms`);
+    console.log(`✅ [AudioPrivado] Gemini interpretó el audio · ia=${msIA} ms total=${Date.now() - t0} ms · respuesta=${VOZ && VOZ.cliente.configurado() ? 'voz si configurada' : 'texto (TTS sin configurar)'}`);
   } catch (err) {
+    DIAG_AUDIO.geminiError++;
     registrarEventoDiag('nota_de_voz_ia', err, Date.now() - t0);
-    console.log(`❌ [NotaDeVoz] ${sanitizarParaLog(err.message)}`);
+    console.log(`❌ [AudioPrivado] no se pudo interpretar: ${sanitizarParaLog(err.message)}`);
     avisarPropietarioSiConfiguracion(sock, err, 'nota_de_voz');
     await sock.sendMessage(remitente, { text: '💔 No pude entender tu nota de voz, ¿me la repites?' });
   }
@@ -1503,12 +1511,15 @@ async function manejarHerramientasVoz(sock, jid, texto, numero) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 🆕 v3.6.0 — Reconocer al propietario en privado (@lid), audios con el nombre de la IA en grupos,
+// 🆕 v3.8.0 — Reconocer al propietario en privado (@lid), audios con el nombre de la IA en grupos,
 //             protección contra claves pegadas en el chat
 // ═══════════════════════════════════════════════════════════════════════════
-const NOMBRES_DE_LA_IA = 'YEYMI AI (puede oírse: Yeymi, Yeimi, Yeime, Yemi, Yeyme, Yeimy, Lleymi, "Yeymi AI")';
-const VOZ_GRUPOS_PARA = (process.env.VOZ_GRUPOS_PARA || 'propietario').toLowerCase(); // propietario | todos | nadie
-const CHAT_PRIVADO_LIBRE_TODOS = (process.env.CHAT_PRIVADO_LIBRE_PARA || 'propietario').toLowerCase() === 'todos';
+const NOMBRES_DE_LA_IA = 'YEIMI (solo el nombre Yeimi)';
+const VOZ_GRUPOS_PARA = (process.env.VOZ_GRUPOS_PARA || 'todos').toLowerCase(); // propietario | todos | nadie
+const CHAT_PRIVADO_LIBRE_TODOS = (process.env.CHAT_PRIVADO_LIBRE_PARA || 'todos').toLowerCase() !== 'false';
+const PRIVADOS_RESPONDEN_CON_VOZ = (process.env.PRIVADOS_RESPONDEN_CON_VOZ || 'true').toLowerCase() !== 'false';
+const MODO_VOZ_PRIVADO = new Set();
+const MODO_TEXTO_PRIVADO = new Set();
 const vistosPrivados = new Set();
 
 // WhatsApp ahora identifica a veces los chats privados con un ID "@lid" en vez del número. Se traduce a tu número real.
@@ -1541,39 +1552,44 @@ async function reconocerPropietarioPrivado(sock, msg) {
 const RE_SECRETOS = [/\bsk_[a-f0-9]{30,}\b/i, /\bsk-[A-Za-z0-9_-]{30,}\b/, /\bAIza[0-9A-Za-z_\-]{30,}\b/, /\bgh[pousr]_[A-Za-z0-9]{30,}\b/, /\bcfut_[A-Za-z0-9]{30,}\b/, /\bBearer\s+[A-Za-z0-9._\-]{30,}\b/];
 function contieneSecreto(texto) { return RE_SECRETOS.some(r => r.test(texto || '')); }
 
-// Nota de voz en un GRUPO: se escucha y solo se responde si la persona llama a la IA por su nombre ("oye Yeymi...").
+// Nota de voz en un GRUPO: se escucha y solo se responde si la persona llama a la IA por su nombre ("oye Yeimi...").
 async function manejarNotaDeVozEnGrupo(sock, msg) {
   const audio = desenvolverContenido(msg.message).audioMessage;
-  if (!VOZ || !audio || !audio.ptt || VOZ_GRUPOS_PARA === 'nadie') return false;
+  if (!audio || VOZ_GRUPOS_PARA === 'nadie') return false;
+  DIAG_AUDIO.gruposDetectados++;
+  console.log(`🎧 [AudioGrupo] detectado id=${msg.key.id || 's/id'} ptt=${!!audio.ptt} mime=${audio.mimetype || 'sin-mime'} segundos=${audio.seconds || '?'} bytes=${audio.fileLength || '?'}`);
   const jidGrupo = msg.key.remoteJid, jidUsuario = msg.key.participant || '';
   const esDueño = await esPropietarioContexto(sock, jidGrupo, jidUsuario);
-  if (VOZ_GRUPOS_PARA === 'propietario' && !esDueño) return false;
+  if (VOZ_GRUPOS_PARA === 'propietario' && !esDueño) { console.log('🔕 [AudioGrupo] ignorado: VOZ_GRUPOS_PARA=propietario y remitente no propietario'); return false; }
   if (idsAudioProcesados.has(msg.key.id)) return true;
   idsAudioProcesados.add(msg.key.id);
   if (idsAudioProcesados.size > 500) idsAudioProcesados.delete(idsAudioProcesados.values().next().value);
-  if (aNumero(audio.seconds) > 120 || aNumero(audio.fileLength) > MAX_BYTES_AUDIO) return true; // en grupos solo notas cortas (cuida tu cuota)
+  if (aNumero(audio.seconds) > 180 || aNumero(audio.fileLength) > MAX_BYTES_AUDIO) { console.log('⚠️ [AudioGrupo] audio excede límites configurados'); return true; } // en grupos solo notas cortas (cuida tu cuota)
   const t0 = Date.now();
   let buffer;
   try { buffer = await downloadMediaMessage(msg, 'buffer', {}, { logger: LOGGER_MEDIA, reuploadRequest: sockActivo && sockActivo.updateMediaMessage }); if (!buffer || buffer.length < 200) return true; }
-  catch (err) { registrarEventoDiag('descarga_audio_grupo', err, Date.now() - t0); return true; }
+  catch (err) { registrarEventoDiag('descarga_audio_grupo', err, Date.now() - t0); console.log(`❌ [AudioGrupo] descarga falló: ${sanitizarParaLog(err.message)}`); return true; }
   const identidad = (await resolverNumeroReal(sock, jidGrupo, jidUsuario)) || extraerNumero(jidUsuario);
   let reglas = REGLAS_IA_BASE;
   const clave = claveModo(jidGrupo, identidad);
   if (modoNovia.get(clave)) reglas += REGLAS_MODO_NOVIA; else if (modoAmiga.get(clave)) reglas += REGLAS_MODO_AMIGA;
   if (estiloGlobalExtra) reglas += `\n\n🔧 DIRECTIVA GLOBAL: ${estiloGlobalExtra}`;
   reglas += NOTA_MODO_VOZ + (esDueño ? '\n\nIMPORTANTE: quien habla es TU PROPIETARIO/CREADOR.' : '');
-  const pregunta = `Escucha esta nota de voz enviada a un grupo de WhatsApp. Decide si la persona se dirige a ti, ${NOMBRES_DE_LA_IA}, llamándote por tu nombre (por ejemplo "hola Yeymi", "oye Yeimi", "Yeymi, dime...").\nResponde SOLO con JSON: {"me_llama": true|false, "respuesta": "..."}.\nSi NO te llama por tu nombre, o solo mencionan el nombre de pasada sin hablarte a ti, pon me_llama=false y respuesta="". Si te llama, "respuesta" es lo que le contestarías, natural, breve y hablado (máximo 4 frases, sin emojis, sin listas, sin markdown).`;
+  const pregunta = `Escucha esta nota de voz enviada a un grupo de WhatsApp. Decide si la persona se dirige a ti, ${NOMBRES_DE_LA_IA}, llamándote por tu nombre (por ejemplo "hola Yeimi", "oye Yeimi", "Yeimi, dime...").\nResponde SOLO con JSON: {"me_llama": true|false, "respuesta": "..."}.\nSi NO te llama por tu nombre, o solo mencionan el nombre de pasada sin hablarte a ti, pon me_llama=false y respuesta="". Si te llama, "respuesta" es lo que le contestarías, natural, breve y hablado (máximo 4 frases, sin emojis, sin listas, sin markdown).`;
   let resultado;
   try {
     const res = await generarConRespaldo('audio_grupo', () => ({ contents: [{ role: 'user', parts: [{ inlineData: { mimeType: audio.mimetype || 'audio/ogg', data: buffer.toString('base64') } }, { text: pregunta }] }], config: { systemInstruction: reglas, safetySettings: SAFETY_SETTINGS, maxOutputTokens: 700, temperature: 0.6, responseMimeType: 'application/json' } }), TIMEOUT_IA_VISION_MS);
     registrarUsoIA();
     try { resultado = JSON.parse(res.text); } catch { resultado = MODULO_TAREA ? MODULO_TAREA.extraerJSON(res.text) : null; }
-  } catch (err) { registrarEventoDiag('audio_grupo_ia', err, Date.now() - t0); return true; }
-  console.log(`⏱️ [AudioGrupo] ${Date.now() - t0} ms · llamó a la IA: ${resultado && resultado.me_llama ? 'sí' : 'no'}`);
+  } catch (err) { DIAG_AUDIO.geminiError++; registrarEventoDiag('audio_grupo_ia', err, Date.now() - t0); console.log(`❌ [AudioGrupo] Gemini no procesó el audio: ${sanitizarParaLog(err.message)}`); return true; }
+  console.log(`⏱️ [AudioGrupo] procesado en ${Date.now() - t0} ms · detectó nombre: ${resultado && resultado.me_llama ? 'sí' : 'no'} · JSON válido: ${!!resultado}`);
+  if (!resultado) { DIAG_AUDIO.geminiError++; console.log('⚠️ [AudioGrupo] respuesta IA no fue JSON interpretable'); return true; }
+  DIAG_AUDIO.geminiOk++;
   if (!resultado || resultado.me_llama !== true || !String(resultado.respuesta || '').trim()) return true; // no la nombró: silencio
+  DIAG_AUDIO.llamadasYeimi++;
   const respuesta = String(resultado.respuesta).trim();
-  if (esDueño) await responderConVoz(sock, jidGrupo, respuesta, extraerNumero(jidUsuario));
-  else await sock.sendMessage(jidGrupo, { text: respuesta }, { quoted: msg });
+  if (VOZ && VOZ.cliente.configurado()) await responderConVoz(sock, jidGrupo, respuesta, extraerNumero(jidUsuario));
+  else await enviarRespuestaHumanizada(sock, jidGrupo, respuesta, [jidUsuario]);
   return true;
 }
 
@@ -2265,7 +2281,7 @@ async function comandoCerrarGrupoComando(sock, jidGrupo, jidUsuario, cerrar) {
 }
 
 function generarTextoInfo() {
-  return `🤖 *${NOMBRE_BOT}* — v${VERSION_BOT}\n\n👨‍💻 Creada por: *${CREADOR}*.\n🟢 Estado: ${estado.conectado ? 'Conectada' : 'Desconectada'}\n⏱ Activa desde hace: ${formatearDuracionLarga(obtenerUptimeMs())}\n\nEscribe /comando yeymi para ver comandos.`;
+  return `🤖 *${NOMBRE_BOT}* — v${VERSION_BOT}\n\n👨‍💻 Creada por: *${CREADOR}*.\n🟢 Estado: ${estado.conectado ? 'Conectada' : 'Desconectada'}\n⏱ Activa desde hace: ${formatearDuracionLarga(obtenerUptimeMs())}\n\nEscribe /comando yeimi para ver comandos.`;
 }
 
 const TEXTO_CREADOR = `💖 Fui creada con mucho cariño por *${CREADOR}*. ¡Gracias por todo! 🙌✨`;
@@ -2420,7 +2436,7 @@ async function procesarMensajeGrupo(sock, msg, identificadoresBot) {
 
   registrarMensajeGrupo(jidGrupo, jidUsuario);
 
-  if (/^\/comando\s+(yeymi|yeimi|velyra|anzy)$/i.test(texto)) { await sock.sendMessage(jidGrupo, { text: TEXTO_AYUDA }); return; }
+  if (/^\/comando\s+(yeimi)$/i.test(texto)) { await sock.sendMessage(jidGrupo, { text: TEXTO_AYUDA }); return; }
   if (PATRON_COMANDO_TIKTOK.test(texto)) { await manejarComandoTiktok(sock, jidGrupo, texto.replace(PATRON_COMANDO_TIKTOK, '').trim()); return; }
   if (PATRON_COMANDO_YOUTUBE.test(texto)) { const m = texto.match(PATRON_COMANDO_YOUTUBE); await manejarComandoYoutube(sock, jidGrupo, m[1]); return; }
   if (PATRON_COMANDO_YOUTUBEVIDEO.test(texto)) { const m = texto.match(PATRON_COMANDO_YOUTUBEVIDEO); await manejarComandoYoutubeVideo(sock, jidGrupo, m[1]); return; }
@@ -2453,7 +2469,7 @@ async function procesarMensajeGrupo(sock, msg, identificadoresBot) {
   const esDueñoResuelto = !!identidadModo && (esPropietario(identidadModo) || propietariosVerificados.has(identidadModo));
   sock.sendPresenceUpdate('composing', jidGrupo).catch(() => {});
 
-  // 🆕 v3.4.0: foto adjunta / citada / reciente (visión, tareas, hojas) — solo si se activó la IA (mención o /yeymi).
+  // 🆕 v3.4.0: foto adjunta / citada / reciente (visión, tareas, hojas) — solo si se activó la IA (mención o /yeimi).
   try { if (await manejarImagenIA(sock, msg, { jidChat: jidGrupo, jidUsuario, identidadModo, nombreContacto, consulta: consultaSinMencion, esGrupo: true })) return; }
   catch (err) { console.log('❌ Error en flujo de imagen:', sanitizarParaLog(err.message)); return; }
 
@@ -2567,7 +2583,7 @@ async function iniciarBot() {
     if (!msg || !msg.message) return;
     const remitente = msg.key.remoteJid;
     if (msg.key.fromMe) return;
-    // 🆕 v3.6.0: si alguien pega una clave/token en el chat, no se procesa ni se guarda, y se avisa.
+    // 🆕 v3.8.0: si alguien pega una clave/token en el chat, no se procesa ni se guarda, y se avisa.
     const _textoSecreto = obtenerTextoMensaje(msg);
     if (_textoSecreto && contieneSecreto(_textoSecreto)) {
       console.log('🔐 Mensaje con una clave secreta detectado: no se procesó ni se guardó.');
@@ -2581,7 +2597,7 @@ async function iniciarBot() {
       if (remitente.endsWith('@s.whatsapp.net') || remitente.endsWith('@lid')) {
         const textoPersonal = obtenerTextoMensaje(msg);
         if (esNumeroIgnorado(remitente)) return;
-        await reconocerPropietarioPrivado(sock, msg).catch(() => false); // 🆕 v3.6.0: traduce el ID @lid a tu número
+        await reconocerPropietarioPrivado(sock, msg).catch(() => false); // 🆕 v3.8.0: traduce el ID @lid a tu número
 
         if (pendientesPropietario.has(remitente)) {
           pendientesPropietario.delete(remitente);
@@ -2591,14 +2607,25 @@ async function iniciarBot() {
         }
 
         // 🆕 v3.5.0: nota de voz del propietario en su chat privado → respuesta hablada automática (sin importar el modo).
-        if (VOZ && esPropietarioEfectivo(remitente)) {
+        if (desenvolverContenido(msg.message).audioMessage && CHAT_PRIVADO_LIBRE_TODOS) {
           try { if (await manejarNotaDeVozPropietario(sock, msg, remitente)) return; }
           catch (err) { registrarEventoDiag('nota_de_voz', err); console.log('❌ Error en nota de voz:', sanitizarParaLog(err.message)); return; }
         }
 
         if (!textoPersonal) return;
 
-        if (/^\/comando\s+(yeymi|yeimi|velyra|anzy)$/i.test(textoPersonal)) { await sock.sendMessage(remitente, { text: TEXTO_AYUDA }); return; }
+        // /voz activa respuestas habladas en este chat; /voz off vuelve al texto.
+        if (/^\/voz(?:\s+(off|texto|activar|on))?\s*$/i.test(textoPersonal.trim())) {
+          const apagarVoz = /\s+(off|texto)$/i.test(textoPersonal.trim());
+          if (apagarVoz) { MODO_VOZ_PRIVADO.delete(remitente); MODO_TEXTO_PRIVADO.add(remitente); await sock.sendMessage(remitente, { text: 'Listo, vuelvo a responder por escrito.' }); }
+          else if (!VOZ || !VOZ.cliente.configurado()) { await sock.sendMessage(remitente, { text: 'No puedo generar voz todavía: revisa ELEVENLABS_API_KEY y ELEVENLABS_VOICE_ID en Render.' }); }
+          else { MODO_TEXTO_PRIVADO.delete(remitente); MODO_VOZ_PRIVADO.add(remitente); await responderConVoz(sock, remitente, 'Hola, ya estoy en modo voz. Dime lo que quieras y te responderé hablando.', extraerNumero(remitente)); }
+          return;
+        }
+
+        if (/^\/voz\s+\S/i.test(textoPersonal.trim())) { MODO_TEXTO_PRIVADO.delete(remitente); MODO_VOZ_PRIVADO.add(remitente); }
+
+        if (/^\/comando\s+(yeimi)$/i.test(textoPersonal)) { await sock.sendMessage(remitente, { text: TEXTO_AYUDA }); return; }
         if (PATRON_COMANDO_TIKTOK.test(textoPersonal)) { await manejarComandoTiktok(sock, remitente, textoPersonal.replace(PATRON_COMANDO_TIKTOK, '').trim()); return; }
         if (PATRON_COMANDO_YOUTUBE.test(textoPersonal)) { const m = textoPersonal.match(PATRON_COMANDO_YOUTUBE); await manejarComandoYoutube(sock, remitente, m[1]); return; }
         if (PATRON_COMANDO_YOUTUBEVIDEO.test(textoPersonal)) { const m = textoPersonal.match(PATRON_COMANDO_YOUTUBEVIDEO); await manejarComandoYoutubeVideo(sock, remitente, m[1]); return; }
@@ -2615,7 +2642,7 @@ async function iniciarBot() {
 
         // 🆕 v3.5.0: en el chat privado del propietario se conversa sin comandos (desactivable con CHAT_PRIVADO_LIBRE=false).
         const esDueñoPrivado = esPropietarioEfectivo(remitente);
-        if (debeResponderIA(textoPersonal, msg, IDENTIFICADORES_BOT_CACHE) || (CHAT_PRIVADO_LIBRE && (esDueñoPrivado || CHAT_PRIVADO_LIBRE_TODOS))) {
+        if (debeResponderIA(textoPersonal, msg, IDENTIFICADORES_BOT_CACHE) || esDueñoPrivado || CHAT_PRIVADO_LIBRE_TODOS) {
           const consultaSinMencion = textoPersonal.replace(/^\/\S*\s*/, '').trim() || textoPersonal;
           // 🔧 En privado la identidad es simplemente el número de quien
           // escribe — no hace falta resolver contra metadata de grupo.
@@ -2627,7 +2654,7 @@ async function iniciarBot() {
             try { if (await manejarCambioModoVoz(sock, remitente, consultaSinMencion, identidadModo)) return; }
             catch (err) { console.log('❌ Error al cambiar el modo de voz:', sanitizarParaLog(err.message)); }
           }
-          const modoVozActivo = !!(VOZ && esDueñoPrivado && obtenerPrefVoz(identidadModo).modo === 'voz');
+          const modoVozActivo = !!(VOZ && !MODO_TEXTO_PRIVADO.has(remitente) && (MODO_VOZ_PRIVADO.has(remitente) || (esDueñoPrivado && obtenerPrefVoz(identidadModo).modo === 'voz') || PRIVADOS_RESPONDEN_CON_VOZ));
 
           // 🆕 v3.4.0: fotos, tiempo encendida y herramientas autorizadas también en privado.
           try { if (await manejarImagenIA(sock, msg, { jidChat: remitente, jidUsuario: remitente, identidadModo, nombreContacto: msg.pushName || 'un usuario', consulta: consultaSinMencion, esGrupo: false })) return; }
@@ -2667,8 +2694,8 @@ async function iniciarBot() {
     }
 
     if (!botActivo) return;
-    // 🆕 v3.6.0: notas de voz en grupos — solo responde si la llaman por su nombre (por defecto, solo a las del propietario).
-    if (VOZ && desenvolverContenido(msg.message).audioMessage) {
+    // 🆕 v3.8.0: notas de voz en grupos — solo responde si la llaman por su nombre (por defecto, solo a las del propietario).
+    if (desenvolverContenido(msg.message).audioMessage) {
       try { if (await manejarNotaDeVozEnGrupo(sock, msg)) return; }
       catch (err) { registrarEventoDiag('audio_grupo', err); console.log('❌ Error en audio de grupo:', sanitizarParaLog(err.message)); return; }
     }
@@ -2696,10 +2723,10 @@ setInterval(async () => {
   }
 }, 30 * 1000);
 
-const PANEL_FONDO_URL = limpiarValorEnv(process.env.PANEL_FONDO_URL) || '';
+// El panel utiliza exclusivamente HTML/CSS/JS; no requiere imagen de fondo.
 
 const LISTA_COMANDOS_PANEL = [
-  { cat: '🧠 Inteligencia Artificial', items: [['/yeymi <pregunta>', 'Pregúntale a la IA (también /yeimi, /velyra, /anzy)'], ['@bot <pregunta>', 'Mencionando al bot'], ['Cita un audio + menciona', 'Entiende y responde sobre el audio 🎙️'], ['Foto (adjunta o citada) + menciona', 'Lee la imagen, resuelve tareas y puede devolverlas en una hoja en imagen 📸'], ['/imagen <descripción>', 'Genera una imagen con IA']] },
+  { cat: '🧠 Inteligencia Artificial', items: [['/yeimi <pregunta>', 'Pregúntale a YEIMI'], ['@bot <pregunta>', 'Mencionando al bot'], ['Cita un audio + menciona', 'Entiende y responde sobre el audio 🎙️'], ['Foto (adjunta o citada) + menciona', 'Lee la imagen, resuelve tareas y puede devolverlas en una hoja en imagen 📸'], ['/imagen <descripción>', 'Genera una imagen con IA']] },
   { cat: '🎭 Modos', items: [['/novia on · off', 'Modo cariñoso'], ['/amiga on · off', 'Modo amiga'], ['/novia @usuario', 'Solo propietario — activa modo novia dirigido a esa persona']] },
   { cat: '🎉 Descargas', items: [['/tiktok <enlace>', 'TikTok sin marca de agua'], ['/youtube <enlace>', 'Audio de YouTube'], ['/youtubevideo <enlace>', 'Video de YouTube'], ['/facebook <enlace>', 'Video de Facebook'], ['/facebookaudio <enlace>', 'Audio de Facebook'], ['/instagram <enlace>', 'Video de Instagram']] },
   { cat: '🎉 Utilidades', items: [['/frase', 'Frase random'], ['/perfil @user', 'Actividad en el grupo']] },
@@ -2716,7 +2743,7 @@ const LISTA_COMANDOS_PANEL = [
     ['Voz (chat privado)', 'Nota de voz → respuesta hablada · "quiero escucharte" / "vuelve a escribirme" · "lista las voces" · "prueba tu voz"'],
     ['Aviso de salida', 'Si un integrante sale del grupo, el aviso+ficha+foto se manda AL MISMO GRUPO; solo tú confirmas la eliminación']
   ] },
-  { cat: '📋 Info', items: [['/info', 'Info del bot'], ['/estado', 'Estado y tiempo encendida (el propietario ve el diagnóstico completo)'], ['/creador', 'Quién lo hizo'], ['/comando yeymi', 'Lista pública']] },
+  { cat: '📋 Info', items: [['/info', 'Info del bot'], ['/estado', 'Estado y tiempo encendida (el propietario ve el diagnóstico completo)'], ['/creador', 'Quién lo hizo'], ['/comando yeimi', 'Lista pública']] },
   { cat: '🗂️ Memoria', items: [['/recordar', 'Qué recuerda de ti'], ['/olvidarme', 'Borra su memoria']] }
 ];
 
@@ -2744,7 +2771,7 @@ function panelAutorizado(req) {
 function sufijoTokenPanel(req) { return PANEL_TOKEN && panelAutorizado(req) ? `?token=${encodeURIComponent(PANEL_TOKEN)}` : ''; }
 
 app.get('/status', (req, res) => {
-  res.json({ conectado: estado.conectado, botActivo, uptimeSegundos: Math.floor((Date.now() - estado.inicio) / 1000), uptimeTexto: formatearDuracionLarga(obtenerUptimeMs()), inicioProceso: new Date(INICIO_PROCESO_MS).toISOString(), mensajesRecibidos: estado.mensajesRecibidos, mensajesEnviados: estado.mensajesEnviados, intentosReconexion: estado.intentosReconexion, cuotaUsada: contadorCuota.usados, cuotaLimite: LIMITE_DIARIO_ESTIMADO, version: VERSION_BOT });
+  res.json({ conectado: estado.conectado, botActivo, uptimeSegundos: Math.floor((Date.now() - estado.inicio) / 1000), uptimeTexto: formatearDuracionLarga(obtenerUptimeMs()), inicioProceso: new Date(INICIO_PROCESO_MS).toISOString(), mensajesRecibidos: estado.mensajesRecibidos, mensajesEnviados: estado.mensajesEnviados, intentosReconexion: estado.intentosReconexion, cuotaUsada: contadorCuota.usados, cuotaLimite: LIMITE_DIARIO_ESTIMADO, version: VERSION_BOT, vozConfigurada: !!(VOZ && VOZ.cliente.configurado()), audiosProcesados: idsAudioProcesados.size, audioDiagnostico: { ...DIAG_AUDIO } });
 });
 
 app.get('/panel/toggle', (req, res) => { if (!panelAutorizado(req)) return res.status(401).send('No autorizado'); botActivo = !botActivo; res.redirect('/' + sufijoTokenPanel(req)); });
@@ -2776,7 +2803,7 @@ app.get('/', (req, res) => {
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
     background-color: #0a0005;
-    ${PANEL_FONDO_URL ? `background-image: linear-gradient(rgba(10,0,5,0.75), rgba(10,0,5,0.9)), url('${PANEL_FONDO_URL}'); background-size: cover; background-position: center; background-attachment: fixed;` : `background-image: radial-gradient(circle at 20% 0%, #2a0015 0%, #0a0005 55%, #000000 100%);`}
+    background-image: radial-gradient(ellipse at 50% -10%, #34404b 0%, #111820 42%, #05090e 100%); background-size: cover; background-attachment: fixed;
     color: #ffd6e8; font-family: 'Space Mono', monospace; min-height: 100vh; display: flex; flex-direction: column; align-items: center; padding: 50px 20px 70px; overflow-x: hidden; position: relative;
   }
   .blob { position: fixed; border-radius: 50%; filter: blur(100px); opacity: 0.35; z-index: 0; pointer-events: none; }
@@ -2815,15 +2842,47 @@ app.get('/', (req, res) => {
   .cmd-desc { font-size: 11px; color: #d999b3; margin-top: 4px; }
   #qr { margin-top: 30px; position: relative; z-index: 1; }
   #qr img { border-radius: 14px; border: 2px solid rgba(255,0,68,0.4); box-shadow: 0 0 30px rgba(255,0,68,0.3); }
+  /* PANEL METÁLICO — acero cepillado, grafito y cian */
+  body { background: radial-gradient(ellipse at 50% -10%, #34404b 0%, #111820 42%, #05090e 100%) !important; color:#e7f0f7; font-family: 'Orbitron', sans-serif; }
+  .blob1,.blob2 { background:#7b9bad; opacity:.16; filter:blur(110px); }
+  h1 { font-family:'Orbitron',sans-serif; font-weight:900; letter-spacing:5px; color:#eaf5ff; text-shadow:0 0 8px #9fc7d9,0 0 24px #397c9a; animation:none; }
+  .lazo { filter:grayscale(1); opacity:.7; }
+  .goteo { background:linear-gradient(90deg,transparent,#a9c5d4,#f2f8fc,#6f91a2,transparent); height:2px; }
+  .sub,.seccion { color:#9fc4d6; text-shadow:0 0 10px #397c9a; }
+  .online { background:rgba(71,191,220,.12); border:1px solid #67c5dd; color:#a9efff; }
+  .online .dot { background:#6de3ff; box-shadow:0 0 12px #6de3ff; }
+  .offline { background:rgba(120,140,155,.1); border-color:#667986; color:#aab8c2; }
+  .btn-control { background:linear-gradient(145deg,#dce7ed 0%,#7e929f 18%,#273642 48%,#101820 100%); border:1px solid #a9c2cf; color:#f4fbff; box-shadow:inset 0 1px 1px #fff8,0 5px 18px #0009; border-radius:7px; }
+  .btn-control:hover { box-shadow:0 0 22px #67c5dd88,inset 0 1px 1px #fff9; }
+  .card { background:linear-gradient(145deg,rgba(106,129,143,.28),rgba(12,20,28,.96)); border:1px solid #607987; box-shadow:inset 0 1px 0 #ffffff22,0 12px 28px #0008; border-radius:10px; }
+  .card .valor { color:#e8f7ff; text-shadow:0 0 12px #4b9ab7; }
+  .card .etiqueta,.cmd-desc { color:#a9bdc9; }
+  .cmd-card { background:linear-gradient(145deg,#263640,#101820); border:1px solid #526b79; box-shadow:inset 0 1px #ffffff16; }
+  .cmd-card:hover { border-color:#8bd7eb; box-shadow:0 0 18px #54b6d477; }
+  .cmd-nombre { color:#bdeeff; }
+  .barra-fondo { border-color:#607987; }
+  .barra-relleno { background:linear-gradient(90deg,#4b7f96,#b5d9e7,#4d9eb8); box-shadow:0 0 12px #58b6d8; }
+  #qr img { border-color:#80b9cd; box-shadow:0 0 30px #397c9a66; }
+  @media(max-width:600px) { body { padding:28px 14px 50px; } h1 {font-size:34px;letter-spacing:2px;} .grid {grid-template-columns:repeat(2,minmax(0,1fr));} .card {padding:16px 10px;} }
+  body:before { content:""; position:fixed; inset:0; pointer-events:none; opacity:.13; z-index:0; background:repeating-linear-gradient(115deg,transparent 0 3px,#d9f2ff 4px,transparent 5px 9px); mix-blend-mode:screen; }
+  body:after { content:""; position:fixed; inset:-40%; pointer-events:none; z-index:0; background:linear-gradient(115deg,transparent 42%,#d8f5ff0b 49%,#d8f5ff24 50%,#d8f5ff0b 51%,transparent 58%); transform:translateX(-35%); animation: barridoMetal 11s ease-in-out infinite; }
+  @keyframes barridoMetal { 0%,15% { transform:translateX(-45%); } 75%,100% { transform:translateX(45%); } }
+  .lazo { font-family:'Orbitron',sans-serif; font-size:11px; letter-spacing:6px; color:#9fcddd; text-shadow:0 0 12px #4bb8d8; margin-bottom:18px; animation:brilloMetal 4s ease-in-out infinite; }
+  @keyframes brilloMetal { 0%,100% {opacity:.65;filter:brightness(.85)} 50% {opacity:1;filter:brightness(1.35)} }
+  .card { position:relative; overflow:hidden; }
+  .card:before { content:""; position:absolute; inset:0 0 auto; height:1px; background:linear-gradient(90deg,transparent,#e6faff,transparent); opacity:.7; }
+  .btn-control:active { transform:translateY(1px) scale(.98); }
+  .barra-relleno { transition:width .8s cubic-bezier(.2,.8,.2,1); }
+  .badge { backdrop-filter:blur(10px); }
 </style>
 </head>
 <body>
   <div class="blob blob1"></div>
   <div class="blob blob2"></div>
-  <div class="lazo">🎀💀</div>
+  <div class="lazo">◈ YEIMI SYSTEMS ◈</div>
   <h1>${NOMBRE_BOT.toUpperCase()}</h1>
   <div class="goteo"></div>
-  <div class="sub">Panel de control tenebroso · ${CREADOR}</div>
+  <div class="sub">CENTRO DE CONTROL · METAL SERIES · ${CREADOR}</div>
   <div id="badge" class="badge offline"><div class="dot"></div>Cargando...</div>
   ${_controles ? `<div class="controles">
     <a href="/panel/toggle${_tk}" class="btn-control">⚡ Encender / Apagar bot</a>
@@ -2835,6 +2894,8 @@ app.get('/', (req, res) => {
     <div class="card"><div class="valor" id="msgOut">0</div><div class="etiqueta">Enviados</div></div>
     <div class="card"><div class="valor" id="uptime">0s</div><div class="etiqueta">Uptime</div></div>
     <div class="card"><div class="valor" id="reint">0</div><div class="etiqueta">Reconexiones</div></div>
+    <div class="card"><div class="valor" id="audioDetectados">0</div><div class="etiqueta">Audios detectados</div></div>
+    <div class="card"><div class="valor" id="audioLlamadas">0</div><div class="etiqueta">Llamadas a Yeimi</div></div>
   </div>
   <div class="seccion">Cuota de IA hoy</div>
   <div class="grid"><div class="card" style="grid-column: 1 / -1"><div class="valor" id="cuotaTexto">0 / 0</div><div class="barra-fondo" style="margin-top:14px"><div class="barra-relleno" id="cuotaBarra" style="width:0%"></div></div></div></div>
@@ -2850,6 +2911,8 @@ app.get('/', (req, res) => {
       document.getElementById('msgIn').textContent = d.mensajesRecibidos;
       document.getElementById('msgOut').textContent = d.mensajesEnviados;
       document.getElementById('reint').textContent = d.intentosReconexion;
+      document.getElementById('audioDetectados').textContent = (d.audioDiagnostico?.privadosDetectados || 0) + (d.audioDiagnostico?.gruposDetectados || 0);
+      document.getElementById('audioLlamadas').textContent = d.audioDiagnostico?.llamadasYeimi || 0;
       const u = d.uptimeSegundos, dd = Math.floor(u / 86400), h = Math.floor((u % 86400) / 3600), m = Math.floor((u % 3600) / 60), s = u % 60;
       document.getElementById('uptime').textContent = (dd > 0 ? dd + 'd ' : '') + h + 'h ' + m + 'm ' + s + 's';
       document.getElementById('uptime').title = d.uptimeTexto || '';
